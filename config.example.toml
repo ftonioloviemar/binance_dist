@@ -1,0 +1,3 @@
+[buckets]
+stable = ["USDT"]
+alt = ["BNB", "AVAX", "ADA"]

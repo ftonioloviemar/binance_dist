@@ -1,0 +1,227 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Iterable
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DEFAULT_BUCKETS_JSON = '{"stable":["USDT"],"alt":["BNB","AVAX","ADA"]}'
+PROFILE_TARGET_FALLBACKS = {
+    "moderate": "BTC=0.40,ETH=0.20,SOL=0.15,STABLE=0.15,ALT=0.10",
+    "aggressive": "BTC=0.30,ETH=0.25,SOL=0.20,ALT=0.15,STABLE=0.10",
+    "conservative": "BTC=0.35,ETH=0.15,SOL=0.05,ALT=0.05,STABLE=0.40",
+}
+STABLE_ASSETS_FALLBACK = "USDT,USDC,BUSD,TUSD,FDUSD,DAI"
+
+
+@dataclass(slots=True)
+class EnvSettings:
+    api_key: str
+    api_secret: str
+    testnet: bool
+    base_url: str
+    recv_window: int
+    openrouter_api_key: str | None = None
+    model_name: str | None = None
+    model_fallback: str | None = None
+
+
+@dataclass(slots=True)
+class BucketConfig:
+    buckets: Dict[str, list[str]]
+
+    def symbols_for(self, bucket: str) -> list[str]:
+        return self.buckets.get(bucket.lower(), [])
+
+
+@dataclass(slots=True)
+class CliDefaults:
+    dry_run: bool
+    profile: str
+    drift: float
+    max_slippage: float
+    min_notional: float
+    quote: str
+
+
+class ConfigError(RuntimeError):
+    """Raised when the runtime configuration is invalid."""
+
+
+def load_env_settings(recv_window: int) -> EnvSettings:
+    api_key = os.getenv("BINANCE_API_KEY")
+    api_secret = os.getenv("BINANCE_API_SECRET")
+    if not api_key or not api_secret:
+        raise ConfigError("Missing BINANCE_API_KEY or BINANCE_API_SECRET environment variables")
+
+    testnet = os.getenv("TESTNET", "false").lower() == "true"
+    base_url = "https://testnet.binance.vision" if testnet else "https://api.binance.com"
+
+    openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
+    model_name = os.getenv("MODEL_NAME", "openrouter/gpt-4o-mini")
+    model_fallback = os.getenv("MODEL_FALLBACK", "qwen/qwen-2.5-7b-instruct:free")
+
+    return EnvSettings(
+        api_key=api_key,
+        api_secret=api_secret,
+        testnet=testnet,
+        base_url=base_url,
+        recv_window=recv_window,
+        openrouter_api_key=openrouter_api_key,
+        model_name=model_name,
+        model_fallback=model_fallback,
+    )
+
+
+def load_bucket_config(path: str | Path | None = None) -> BucketConfig:
+    bucket_map = _load_default_buckets()
+    cfg_path = Path(path) if path else Path("config.toml")
+    if not cfg_path.exists():
+        return BucketConfig(buckets=bucket_map)
+
+    import tomllib  # local import to avoid dependency during linting
+
+    with cfg_path.open("rb") as handle:
+        data = tomllib.load(handle)
+
+    buckets = data.get("buckets", {})
+    for name, symbols in buckets.items():
+        if not isinstance(symbols, Iterable):
+            continue
+        cleaned = [str(sym).upper() for sym in symbols if sym]
+        if cleaned:
+            bucket_map[str(name).lower()] = cleaned
+
+    return BucketConfig(buckets=bucket_map)
+
+
+def load_cli_defaults() -> CliDefaults:
+    return CliDefaults(
+        dry_run=_parse_bool(os.getenv("DEFAULT_DRY_RUN", "true")),
+        profile=os.getenv("DEFAULT_PROFILE", "moderate").lower(),
+        drift=float(os.getenv("DEFAULT_DRIFT", "0.10")),
+        max_slippage=float(os.getenv("DEFAULT_MAX_SLIPPAGE", "0.003")),
+        min_notional=float(os.getenv("DEFAULT_MIN_NOTIONAL", "10")),
+        quote=os.getenv("DEFAULT_QUOTE", "USDT").upper(),
+    )
+
+
+def load_stable_assets() -> set[str]:
+    raw = os.getenv("STABLE_ASSETS", STABLE_ASSETS_FALLBACK)
+    return {token.strip().upper() for token in raw.split(",") if token.strip()}
+
+
+def load_guardrails() -> tuple[float, float]:
+    stable_guardrail = float(os.getenv("STABLE_GUARDRAIL", "0.10"))
+    btc_guardrail = float(os.getenv("BTC_GUARDRAIL", "0.25"))
+    return stable_guardrail, btc_guardrail
+
+
+def parse_targets_arg(raw: str | None) -> Dict[str, float]:
+    if not raw:
+        return {}
+    targets: Dict[str, float] = {}
+    for chunk in raw.split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if "=" not in chunk:
+            raise ConfigError(f"Invalid target token '{chunk}', expected format symbol=weight")
+        symbol, weight = chunk.split("=", 1)
+        try:
+            targets[symbol.upper()] = float(weight)
+        except ValueError as exc:  # pragma: no cover - defensive
+            raise ConfigError(f"Invalid weight for '{symbol}': {weight}") from exc
+    return targets
+
+
+def select_profile_targets(profile: str, explicit: Dict[str, float] | None = None) -> Dict[str, float]:
+    if explicit:
+        return explicit
+    mapping = _load_profile_targets()
+    try:
+        preset = mapping[profile.lower()]
+    except KeyError as exc:
+        raise ConfigError(f"Unsupported profile '{profile}'") from exc
+    return {k.upper(): v for k, v in preset.items()}
+
+
+def expand_buckets(targets: Dict[str, float], bucket_config: BucketConfig) -> Dict[str, float]:
+    expanded: Dict[str, float] = {}
+    for key, weight in targets.items():
+        bucket_symbols = bucket_config.symbols_for(key.lower())
+        if bucket_symbols:
+            per_symbol = weight / len(bucket_symbols)
+            for symbol in bucket_symbols:
+                expanded[symbol.upper()] = expanded.get(symbol.upper(), 0.0) + per_symbol
+        else:
+            expanded[key.upper()] = expanded.get(key.upper(), 0.0) + weight
+
+    total = sum(expanded.values())
+    if total <= 0:
+        raise ConfigError("Target weights must sum to a positive value")
+
+    normalized = {symbol: weight / total for symbol, weight in expanded.items()}
+    return normalized
+
+
+def _load_profile_targets() -> Dict[str, Dict[str, float]]:
+    mapping: Dict[str, Dict[str, float]] = {}
+    for name, fallback in PROFILE_TARGET_FALLBACKS.items():
+        env_key = f"PROFILE_TARGETS_{name.upper()}"
+        raw = os.getenv(env_key, fallback)
+        parsed = parse_targets_arg(raw)
+        if not parsed:
+            raise ConfigError(f"Profile '{name}' must define at least one target")
+        mapping[name] = parsed
+    return mapping
+
+
+def _load_default_buckets() -> Dict[str, list[str]]:
+    raw = os.getenv("BUCKETS_JSON", DEFAULT_BUCKETS_JSON)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError("BUCKETS_JSON must be valid JSON") from exc
+    bucket_map: Dict[str, list[str]] = {}
+    for name, symbols in data.items():
+        if not isinstance(symbols, Iterable):
+            continue
+        cleaned = [str(sym).upper() for sym in symbols if sym]
+        if cleaned:
+            bucket_map[str(name).lower()] = cleaned
+    if not bucket_map:
+        raise ConfigError("At least one bucket must be configured")
+    return bucket_map
+
+
+def _parse_bool(value: str) -> bool:
+    truthy = {"1", "true", "yes", "on"}
+    falsy = {"0", "false", "no", "off"}
+    normalized = value.strip().lower()
+    if normalized in truthy:
+        return True
+    if normalized in falsy:
+        return False
+    raise ConfigError(f"Invalid boolean value '{value}'")
+
+
+__all__ = [
+    "BucketConfig",
+    "CliDefaults",
+    "ConfigError",
+    "EnvSettings",
+    "expand_buckets",
+    "load_bucket_config",
+    "load_cli_defaults",
+    "load_env_settings",
+    "load_guardrails",
+    "load_stable_assets",
+    "parse_targets_arg",
+    "select_profile_targets",
+]
