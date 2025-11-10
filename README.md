@@ -6,6 +6,7 @@ Production-ready CLI that connects to Binance Spot, evaluates portfolio drift, o
 - Deterministic CLI workflow with dry-run default and rich risk controls (drift, slippage, min-notional).
 - Modular architecture: env/config parsing, Binance REST client, portfolio math, execution planner, and audit logger.
 - Optional AI target refinement via OpenRouter with guardrails and safe fallbacks.
+- Simple Earn automation (optional): consolidate Spot + Earn, consult AI for “maintain vs redistribute”, redeem flexible positions, trade, and re-deposit idle balances respecting product limits.
 - Plain-text JSON log files (`logs/YYYYMMDD.log`) capture every run/step/order with automatic daily rotation.
 - pytest suite covering core math, decision logic, quantity rounding, and client signing.
 
@@ -42,6 +43,14 @@ uv run app.py audit --run-id <run_id_from_previous_command>
 - `.env` also controls operational defaults: dry-run flag, profile, drift/slippage/min-notional thresholds, target weights per profile, guardrails, bucket definitions (`BUCKETS_JSON`), and log retention (`LOG_RETENTION_DAYS`). Adjust it instead of editing Python files.
 - `config.toml` remains available for bucket overrides (e.g. `stable`, `alt`) if you prefer TOML.
 - Keys are never logged; failures are fatal if any mandatory variable is missing.
+
+### Simple Earn automation
+- Enable via `SIMPLE_EARN_ENABLED=true`. Use `SIMPLE_EARN_FAST_REDEEM` (default true) to request fast redeems when Binance quotas allow, and `SIMPLE_EARN_EXCLUDE_ASSETS=BTC,BNB,...` to keep specific symbols on Spot.
+- Flow per run:
+  1. Fetch Spot balances + Simple Earn flexible positions/products, merge snapshots, and send the consolidated view to the AI. If it replies `"maintain"`, the bot stops immediately without touching funds.
+  2. When the AI replies `"redistribute"`, redeem all eligible flexible positions (dry-run friendly), refresh Spot balances, and execute the standard rebalance plan.
+  3. After trades settle, push every eligible Spot balance back into Simple Earn flexible products, honoring Binance quotas/minimums; amounts that cannot be subscribed stay on Spot for the next cycle.
+- Each Earn step is logged (`earn_snapshot`, `earn_redeem`, `earn_subscribe`) alongside the trading/audit entries so the full run remains traceable.
 
 ## Logging & Audit
 Each run appends JSON lines to `logs/YYYYMMDD.log` (one file per day, rotated by retention window):

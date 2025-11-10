@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, Mapping, MutableMapping, Sequence
+from typing import Any, Dict, Iterable, Mapping, MutableMapping, Sequence
 
 import json
 import logging
@@ -68,6 +68,13 @@ class ExecutionResult:
     detail: Mapping[str, object] | None
 
 
+@dataclass(slots=True)
+class AIAdvice:
+    targets: Dict[str, float]
+    action: str
+    rationale: str | None = None
+
+
 class PortfolioError(RuntimeError):
     pass
 
@@ -131,23 +138,27 @@ def ai_refine_targets(
     portfolio_value: float,
     current_weights: Mapping[str, float],
     proposed_weights: Mapping[str, float],
-) -> tuple[Dict[str, float], str | None]:
+    portfolio_context: Mapping[str, Any] | None = None,
+) -> AIAdvice:
+    default_advice = AIAdvice(targets=dict(proposed_weights), action="redistribute", rationale=None)
     if not api_key or not models:
-        return dict(proposed_weights), None
+        return default_advice
 
     rationale: str | None = None
     for model_name in models:
-        weights, rationale = _call_openrouter_model(
+        weights, rationale, action = _call_openrouter_model(
             api_key=api_key,
             model_name=model_name,
             portfolio_value=portfolio_value,
             current_weights=current_weights,
             proposed_weights=proposed_weights,
+            portfolio_context=portfolio_context,
         )
-        if weights:
-            guarded = _apply_ai_guardrails(weights, proposed_weights)
-            return guarded, rationale
-    return dict(proposed_weights), rationale
+        if weights or action:
+            guarded = _apply_ai_guardrails(weights or proposed_weights, proposed_weights)
+            normalized_action = _normalize_action(action)
+            return AIAdvice(targets=guarded, action=normalized_action, rationale=rationale)
+    return default_advice
 
 
 def _call_openrouter_model(
@@ -157,7 +168,24 @@ def _call_openrouter_model(
     portfolio_value: float,
     current_weights: Mapping[str, float],
     proposed_weights: Mapping[str, float],
-) -> tuple[Dict[str, float], str | None]:
+    portfolio_context: Mapping[str, Any] | None = None,
+) -> tuple[Dict[str, float], str | None, str | None]:
+    context_payload: Dict[str, Any] = {
+        "currentWeights": current_weights,
+        "proposedWeights": proposed_weights,
+        "portfolioValue": portfolio_value,
+    }
+    if portfolio_context:
+        context_payload["holdings"] = portfolio_context
+    prompt = (
+        "Analyze the consolidated crypto portfolio described by the following JSON context: {context}. "
+        "Decide whether to maintain the current allocation ('maintain') or recommend a redistribution ('redistribute'). "
+        "If redistribution is recommended, adjust target weights within +/-0.05 absolute weight from the proposed targets. "
+        "Always respond with JSON containing: "
+        "\"action\" (\"maintain\" or \"redistribute\"), "
+        "\"targets\" (object mapping asset symbol to weight), and "
+        "\"rationale\" (short string)."
+    ).format(context=json.dumps(context_payload))
     payload = {
         "model": model_name,
         "response_format": {"type": "json_object"},
@@ -168,15 +196,7 @@ def _call_openrouter_model(
             },
             {
                 "role": "user",
-                "content": (
-                    "Given current weights {current} and proposed targets {proposed} for a moderate growth crypto portfolio "
-                    "worth {value:.2f} quote units, adjust each asset by no more than 0.05 absolute weight. "
-                    "Return JSON with keys asset symbols and values target weights, plus a 'rationale' string."
-                ).format(
-                    current=json.dumps(current_weights),
-                    proposed=json.dumps(proposed_weights),
-                    value=portfolio_value,
-                ),
+                "content": prompt,
             },
         ],
     }
@@ -190,12 +210,12 @@ def _call_openrouter_model(
         response.raise_for_status()
     except requests.RequestException as exc:  # pragma: no cover - network guard
         logger.warning("OpenRouter request failed for model %s: %s", model_name, exc)
-        return {}, None
+        return {}, None, None
 
     data = response.json()
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-    weights, rationale = _extract_weights_from_message(content)
-    return weights, rationale
+    weights, rationale, action = _extract_plan_from_message(content)
+    return weights, rationale, action
 
 
 def decide_rebalance(
@@ -327,18 +347,23 @@ def filter_dust_positions(
     return filtered_snapshot, dust
 
 
-def _extract_weights_from_message(content: str) -> tuple[Dict[str, float], str | None]:
+def _extract_plan_from_message(content: str) -> tuple[Dict[str, float], str | None, str | None]:
     match = re.search(r"\{.*\}", content, re.S)
     if not match:
-        return {}, None
+        return {}, None, None
     try:
         payload = json.loads(match.group())
     except json.JSONDecodeError:
-        return {}, None
+        return {}, None, None
 
     rationale = None
+    action = None
     if isinstance(payload, dict) and "rationale" in payload:
         rationale = str(payload.pop("rationale"))
+    if isinstance(payload, dict):
+        raw_action = payload.get("action") or payload.get("decision") or payload.get("directive")
+        if isinstance(raw_action, str):
+            action = raw_action.lower()
 
     def _coerce_weights(data: Mapping[str, object]) -> Dict[str, float]:
         weights: Dict[str, float] = {}
@@ -352,32 +377,32 @@ def _extract_weights_from_message(content: str) -> tuple[Dict[str, float], str |
     if isinstance(payload, dict):
         weights = _coerce_weights(payload)
         if weights:
-            return weights, rationale
+            return weights, rationale, action
         for candidate_key in ("targets", "target", "weights", "allocations", "allocation"):
             candidate = payload.get(candidate_key)
             if isinstance(candidate, Mapping):
                 weights = _coerce_weights(candidate)
                 if weights:
-                    return weights, rationale
+                    return weights, rationale, action
         for value in payload.values():
             if isinstance(value, Mapping):
                 weights = _coerce_weights(value)
                 if weights:
-                    return weights, rationale
+                    return weights, rationale, action
             if isinstance(value, list):
                 for item in value:
                     if isinstance(item, Mapping):
                         weights = _coerce_weights(item)
                         if weights:
-                            return weights, rationale
+                            return weights, rationale, action
     elif isinstance(payload, list):
         for item in payload:
             if isinstance(item, Mapping):
                 weights = _coerce_weights(item)
                 if weights:
-                    return weights, rationale
+                    return weights, rationale, action
 
-    return {}, rationale
+    return {}, rationale, action
 
 
 def _apply_ai_guardrails(
@@ -439,7 +464,17 @@ def _apply_tick_size(price: float, tick_size: float, side: str) -> float:
     return rounded_steps * tick_size
 
 
+def _normalize_action(action: str | None) -> str:
+    if not action:
+        return "redistribute"
+    normalized = action.strip().lower()
+    if normalized.startswith(("maintain", "keep", "hold")):
+        return "maintain"
+    return "redistribute"
+
+
 __all__ = [
+    "AIAdvice",
     "AssetPosition",
     "ExecutionResult",
     "filter_dust_positions",

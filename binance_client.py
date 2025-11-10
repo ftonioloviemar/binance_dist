@@ -43,6 +43,72 @@ class SymbolFilters:
 
 
 @dataclass(slots=True)
+class SimpleEarnProduct:
+    product_id: str
+    asset: str
+    status: str
+    can_purchase: bool
+    can_redeem: bool
+    can_fast_redeem: bool
+    min_purchase_amount: float
+    max_purchase_amount: float | None
+    purchase_limit_per_user: float | None
+    purchase_limit_per_day: float | None
+    left_quota: float | None
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SimpleEarnProduct":
+        def _float(value: Any | None) -> float | None:
+            if value in (None, ""):
+                return None
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return None
+
+        return cls(
+            product_id=str(payload.get("productId")),
+            asset=str(payload.get("asset", "")).upper(),
+            status=str(payload.get("status", "")),
+            can_purchase=bool(payload.get("canPurchase", False)),
+            can_redeem=bool(payload.get("canRedeem", False)),
+            can_fast_redeem=bool(payload.get("canFastRedeem", False)),
+            min_purchase_amount=float(payload.get("minPurchaseAmount", "0") or 0),
+            max_purchase_amount=_float(payload.get("maxPurchaseAmount")),
+            purchase_limit_per_user=_float(payload.get("purchaseLimitPerUser")),
+            purchase_limit_per_day=_float(payload.get("purchaseLimitPerDay")),
+            left_quota=_float(payload.get("leftQuota")) or _float(payload.get("fastRedeemQuota")),
+        )
+
+
+@dataclass(slots=True)
+class SimpleEarnPosition:
+    product_id: str
+    asset: str
+    total_amount: float
+    redeemable_amount: float
+    can_fast_redeem: bool
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "SimpleEarnPosition":
+        def _float(value: Any | None) -> float:
+            if value in (None, ""):
+                return 0.0
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        return cls(
+            product_id=str(payload.get("productId")),
+            asset=str(payload.get("asset", "")).upper(),
+            total_amount=_float(payload.get("totalAmount") or payload.get("amount")),
+            redeemable_amount=_float(payload.get("redeemableAmount") or payload.get("totalAmount")),
+            can_fast_redeem=bool(payload.get("canFastRedeem", False)),
+        )
+
+
+@dataclass(slots=True)
 class Balance:
     asset: str
     free: float
@@ -150,6 +216,52 @@ class BinanceClient:
 
         return self._request("POST", f"{API_PREFIX}/order", params=params, signed=True)
 
+    # --- Simple Earn helpers -----------------------------------------------
+    def get_simple_earn_flexible_products(self, asset: str | None = None) -> Dict[str, SimpleEarnProduct]:
+        params: Dict[str, Any] = {"current": 1, "size": 100}
+        if asset:
+            params["asset"] = asset.upper()
+        payload = self._request("GET", "/sapi/v1/simple-earn/flexible/list", params=params, signed=True)
+        rows = payload.get("rows") if isinstance(payload, Mapping) else payload
+        products: Dict[str, SimpleEarnProduct] = {}
+        if isinstance(rows, list):
+            for item in rows:
+                if not isinstance(item, Mapping):
+                    continue
+                product = SimpleEarnProduct.from_payload(item)
+                products[product.product_id] = product
+        return products
+
+    def get_simple_earn_flexible_positions(self) -> list[SimpleEarnPosition]:
+        params: Dict[str, Any] = {"current": 1, "size": 100}
+        payload = self._request("GET", "/sapi/v1/simple-earn/flexible/position", params=params, signed=True)
+        rows = payload.get("rows") if isinstance(payload, Mapping) else payload
+        positions: list[SimpleEarnPosition] = []
+        if isinstance(rows, list):
+            for item in rows:
+                if not isinstance(item, Mapping):
+                    continue
+                positions.append(SimpleEarnPosition.from_payload(item))
+        return positions
+
+    def redeem_simple_earn_flexible(
+        self,
+        *,
+        product_id: str,
+        amount: float,
+        fast: bool,
+    ) -> Mapping[str, Any]:
+        params: Dict[str, Any] = {
+            "productId": product_id,
+            "amount": _format_decimal(amount),
+            "type": "FAST" if fast else "STANDARD",
+        }
+        return self._request("POST", "/sapi/v1/simple-earn/flexible/redeem", params=params, signed=True)
+
+    def subscribe_simple_earn_flexible(self, *, product_id: str, amount: float) -> Mapping[str, Any]:
+        params: Dict[str, Any] = {"productId": product_id, "amount": _format_decimal(amount)}
+        return self._request("POST", "/sapi/v1/simple-earn/flexible/subscribe", params=params, signed=True)
+
     # --- internal helpers ----------------------------------------------------
     def _request(
         self,
@@ -211,6 +323,8 @@ def _format_decimal(value: float) -> str:
 __all__ = [
     "Balance",
     "BinanceClient",
+    "SimpleEarnPosition",
+    "SimpleEarnProduct",
     "SymbolFilters",
     "create_signature",
 ]

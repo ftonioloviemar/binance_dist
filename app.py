@@ -6,7 +6,7 @@ import logging
 import sys
 from typing import Any, Dict, List, Mapping, Sequence
 
-from binance_client import Balance, BinanceClient
+from binance_client import Balance, BinanceClient, SimpleEarnPosition, SimpleEarnProduct
 from config import (
     ConfigError,
     expand_buckets,
@@ -19,6 +19,7 @@ from config import (
 from execution import execute_trades
 from logging_audit import AuditLogger, load_recent_runs, load_run_detail
 from portfolio import (
+    AIAdvice,
     PortfolioError,
     PortfolioSnapshot,
     ai_refine_targets,
@@ -104,38 +105,135 @@ def run_rebalance(args: argparse.Namespace) -> int:
         "max_slippage": args.max_slippage,
         "min_notional": args.min_notional,
     }
+    config_snapshot["simple_earn"] = {
+        "enabled": env_settings.simple_earn_enabled,
+        "fast_redeem": env_settings.simple_earn_fast_redeem,
+        "exclude": sorted(env_settings.simple_earn_exclude_assets or []),
+    }
     auditor.start_run(profile=args.profile, dry_run=args.dry_run, config_snapshot=config_snapshot)
     auditor.log_step(name="connect_binance", status="info", detail=f"Endpoint {env_settings.base_url}")
     pendings: list[str] = []
+    simple_earn_positions: list[SimpleEarnPosition] = []
+    simple_earn_products: dict[str, SimpleEarnProduct] = {}
+    simple_earn_by_asset: dict[str, SimpleEarnProduct] = {}
 
     try:
         balances = client.get_account_balances()
         auditor.log_step(name="fetch_assets", status="info", detail=f"Fetched {len(balances)} balances")
-        asset_prices = _fetch_asset_prices(client, balances, target_weights, args.quote)
-        full_snapshot = compute_current_weights(balances, asset_prices, args.quote)
-        listed_assets = ", ".join(sorted(full_snapshot.positions.keys())[:20])
-        suffix = " ..." if len(full_snapshot.positions) > 20 else ""
-        auditor.log_step(name="list_assets", status="info", detail=f"{listed_assets}{suffix}")
+        if env_settings.simple_earn_enabled:
+            try:
+                simple_earn_positions = client.get_simple_earn_flexible_positions()
+                auditor.log_step(
+                    name="earn_snapshot",
+                    status="info",
+                    detail=f"{len(simple_earn_positions)} Simple Earn flex positions",
+                )
+            except Exception as exc:
+                pendings.append(f"Simple Earn snapshot failed: {exc}")
+                auditor.log_step(name="earn_snapshot", status="failed", detail=str(exc))
+                simple_earn_positions = []
+            try:
+                simple_earn_products = client.get_simple_earn_flexible_products()
+                exclude = env_settings.simple_earn_exclude_assets or set()
+                simple_earn_by_asset = _map_products_by_asset(simple_earn_products.values(), exclude)
+                auditor.log_step(
+                    name="earn_products",
+                    status="info",
+                    detail=f"{len(simple_earn_by_asset)} assets eligible for Simple Earn",
+                )
+            except Exception as exc:
+                pendings.append(f"Simple Earn product lookup failed: {exc}")
+                auditor.log_step(name="earn_products", status="failed", detail=str(exc))
+                simple_earn_products = {}
+                simple_earn_by_asset = {}
+
+        earn_balances = _balances_from_earn(simple_earn_positions) if simple_earn_positions else []
+        combined_balances = list(balances)
+        if earn_balances:
+            combined_balances.extend(earn_balances)
+        price_source = combined_balances or balances
+        asset_prices = _fetch_asset_prices(client, price_source, target_weights, args.quote)
+        consolidated_snapshot = compute_current_weights(price_source, asset_prices, args.quote)
+        holdings_context = _build_holdings_context(
+            spot_balances=balances,
+            earn_positions=simple_earn_positions,
+            prices=asset_prices,
+            quote=args.quote,
+        )
+        spot_total_value = float(holdings_context.get("totals", {}).get("spot", 0.0))
         model_chain = [
             env_settings.model_name or "openrouter/gpt-4o-mini",
             env_settings.model_fallback,
         ]
         models = [model for model in model_chain if model]
         detail_msg = (
-            "Consulting AI models"
+            "Consulting AI models on consolidated holdings"
             if models and env_settings.openrouter_api_key
             else "Skipping AI (no API key configured)"
         )
         auditor.log_step(name="ai_consult", status="info", detail=detail_msg)
-        refined_targets, rationale = ai_refine_targets(
+        advice: AIAdvice = ai_refine_targets(
             api_key=env_settings.openrouter_api_key,
             models=models,
-            portfolio_value=full_snapshot.total_value,
-            current_weights={asset: pos.weight for asset, pos in full_snapshot.positions.items()},
+            portfolio_value=consolidated_snapshot.total_value,
+            current_weights={asset: pos.weight for asset, pos in consolidated_snapshot.positions.items()},
             proposed_weights=target_weights,
+            portfolio_context=holdings_context,
         )
-        if rationale:
-            auditor.log_step(name="ai_consult", status="info", detail=rationale)
+        refined_targets = advice.targets
+        if advice.rationale:
+            auditor.log_step(name="ai_consult", status="info", detail=advice.rationale)
+        auditor.log_step(name="ai_directive", status="info", detail=f"Action={advice.action}")
+        if advice.action == "maintain":
+            auditor.finalize_run("skipped")
+            logger.info("AI recommended maintaining allocations; stopping run.")
+            return 0
+
+        if env_settings.simple_earn_enabled and simple_earn_positions:
+            _redeem_simple_earn_positions(
+                client=client,
+                positions=simple_earn_positions,
+                products_by_id=simple_earn_products,
+                fast=env_settings.simple_earn_fast_redeem,
+                dry_run=args.dry_run,
+                auditor=auditor,
+                pendings=pendings,
+            )
+            if not args.dry_run:
+                balances = client.get_account_balances()
+                auditor.log_step(
+                    name="fetch_assets_post_redeem",
+                    status="info",
+                    detail=f"Fetched {len(balances)} balances after Simple Earn redeem",
+                )
+
+        rebalance_balances: Sequence[Balance] = balances
+        spot_effectively_empty = not balances or (args.dry_run and spot_total_value <= 0)
+        if spot_effectively_empty:
+            fallback_balances = earn_balances or (
+                _balances_from_earn(simple_earn_positions) if simple_earn_positions else []
+            )
+            if fallback_balances:
+                rebalance_balances = fallback_balances
+                auditor.log_step(
+                    name="rebalance_source",
+                    status="info",
+                    detail="Using Simple Earn balances as Spot source (Spot empty)",
+                )
+            else:
+                auditor.log_step(
+                    name="rebalance_source",
+                    status="failed",
+                    detail="No Spot or Simple Earn balances available",
+                )
+                raise PortfolioError("No balances available to plan a rebalance")
+
+        asset_prices = _fetch_asset_prices(client, rebalance_balances, refined_targets, args.quote)
+        full_snapshot = compute_current_weights(rebalance_balances, asset_prices, args.quote)
+        listed_assets = ", ".join(sorted(full_snapshot.positions.keys())[:20])
+        suffix = " ..." if len(full_snapshot.positions) > 20 else ""
+        auditor.log_step(name="list_assets", status="info", detail=f"{listed_assets}{suffix}")
+
         asset_prices = _ensure_target_prices(client, asset_prices, refined_targets, args.quote)
         symbols = _collect_symbols(full_snapshot, refined_targets, args.quote)
         if symbols:
@@ -192,7 +290,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
             logger.info("No eligible trades after applying filters and notional limits.")
             return 0
 
-        available_balances = _init_available_balances(snapshot, full_snapshot, balances)
+        available_balances = _init_available_balances(snapshot, full_snapshot, rebalance_balances)
         auditor.log_step(name="execution", status="in_progress", detail=f"{len(trades)} trades planned")
         execute_trades(
             trades=trades,
@@ -204,13 +302,25 @@ def run_rebalance(args: argparse.Namespace) -> int:
         )
         auditor.log_step(name="execution", status="completed", detail="Trades processed")
         final_snapshot = snapshot
+        latest_balances = balances
         try:
             final_balances = client.get_account_balances()
             latest_prices = _fetch_asset_prices(client, final_balances, refined_targets, args.quote)
             final_snapshot = compute_current_weights(final_balances, latest_prices, args.quote)
+            latest_balances = final_balances
         except Exception as exc:  # pragma: no cover - defensive refresh
             logger.warning("Failed to refresh final balances: %s", exc)
+
         _print_summary(full_snapshot, final_snapshot)
+        if env_settings.simple_earn_enabled and simple_earn_by_asset:
+            _subscribe_simple_earn_balances(
+                client=client,
+                balances=latest_balances,
+                products_by_asset=simple_earn_by_asset,
+                dry_run=args.dry_run,
+                auditor=auditor,
+                pendings=pendings,
+            )
         if pendings:
             _log_pendings(auditor, pendings)
         auditor.finalize_run("completed")
@@ -258,6 +368,152 @@ def _parse_bool(value: str) -> bool:
     if normalized in falsy:
         return False
     raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
+
+def _balances_from_earn(positions: Sequence[SimpleEarnPosition]) -> list[Balance]:
+    aggregated: Dict[str, float] = {}
+    for position in positions:
+        amount = position.total_amount
+        if amount <= 0:
+            continue
+        aggregated[position.asset.upper()] = aggregated.get(position.asset.upper(), 0.0) + amount
+    return [Balance(asset=asset, free=amount, locked=0.0) for asset, amount in aggregated.items()]
+
+
+def _build_holdings_context(
+    *,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+    prices: Mapping[str, float],
+    quote: str,
+) -> Dict[str, Any]:
+    context: Dict[str, Any] = {"spot": {}, "earn": {}, "totals": {"spot": 0.0, "earn": 0.0, "overall": 0.0}}
+    quote_asset = quote.upper()
+    for balance in spot_balances:
+        asset = balance.asset.upper()
+        price = 1.0 if asset == quote_asset else prices.get(asset)
+        if price is None:
+            continue
+        value = balance.total * price
+        context["spot"][asset] = {"amount": balance.total, "value": value}
+        context["totals"]["spot"] += value
+    for position in earn_positions:
+        asset = position.asset.upper()
+        price = 1.0 if asset == quote_asset else prices.get(asset)
+        if price is None:
+            continue
+        value = position.total_amount * price
+        bucket = context["earn"].setdefault(asset, {"amount": 0.0, "value": 0.0})
+        bucket["amount"] += position.total_amount
+        bucket["value"] += value
+        context["totals"]["earn"] += value
+    context["totals"]["overall"] = context["totals"]["spot"] + context["totals"]["earn"]
+    return context
+
+
+def _map_products_by_asset(
+    products: Sequence[SimpleEarnProduct],
+    exclude_assets: set[str],
+) -> dict[str, SimpleEarnProduct]:
+    mapping: dict[str, SimpleEarnProduct] = {}
+    for product in products:
+        if not isinstance(product, SimpleEarnProduct):
+            continue
+        asset = product.asset.upper()
+        if asset in exclude_assets:
+            continue
+        if not product.can_purchase:
+            continue
+        status = product.status.upper()
+        if status not in {"SUBSCRIBABLE", "LIVE"}:
+            continue
+        mapping.setdefault(asset, product)
+    return mapping
+
+
+def _redeem_simple_earn_positions(
+    *,
+    client: BinanceClient,
+    positions: Sequence[SimpleEarnPosition],
+    products_by_id: Mapping[str, SimpleEarnProduct],
+    fast: bool,
+    dry_run: bool,
+    auditor: AuditLogger,
+    pendings: list[str],
+) -> None:
+    for position in positions:
+        amount = position.redeemable_amount or position.total_amount
+        if amount <= 0:
+            continue
+        product = products_by_id.get(position.product_id)
+        allow_fast = fast and ((product and product.can_fast_redeem) or position.can_fast_redeem)
+        detail = f"{position.asset} amount={amount:.8f} product={position.product_id}"
+        if dry_run:
+            auditor.log_step(name="earn_redeem", status="simulated", detail=detail)
+            continue
+        try:
+            client.redeem_simple_earn_flexible(
+                product_id=position.product_id,
+                amount=amount,
+                fast=allow_fast,
+            )
+            auditor.log_step(name="earn_redeem", status="completed", detail=detail)
+        except Exception as exc:
+            message = f"Redeem {position.asset}: {exc}"
+            pendings.append(message)
+            auditor.log_step(name="earn_redeem", status="failed", detail=message)
+
+
+def _subscribe_simple_earn_balances(
+    *,
+    client: BinanceClient,
+    balances: Sequence[Balance],
+    products_by_asset: Mapping[str, SimpleEarnProduct],
+    dry_run: bool,
+    auditor: AuditLogger,
+    pendings: list[str],
+) -> None:
+    for balance in balances:
+        asset = balance.asset.upper()
+        product = products_by_asset.get(asset)
+        if not product:
+            continue
+        available = balance.free
+        if available <= 0:
+            continue
+        amount = _clamp_subscription_amount(available, product)
+        if amount <= 0:
+            continue
+        detail = f"{asset} amount={amount:.8f} -> product {product.product_id}"
+        if dry_run:
+            auditor.log_step(name="earn_subscribe", status="simulated", detail=detail)
+            continue
+        try:
+            client.subscribe_simple_earn_flexible(product_id=product.product_id, amount=amount)
+            auditor.log_step(name="earn_subscribe", status="completed", detail=detail)
+        except Exception as exc:
+            message = f"Subscribe {asset}: {exc}"
+            pendings.append(message)
+            auditor.log_step(name="earn_subscribe", status="failed", detail=message)
+
+
+def _clamp_subscription_amount(amount: float, product: SimpleEarnProduct) -> float:
+    min_amount = max(product.min_purchase_amount, 0.0)
+    if min_amount > 0 and amount < min_amount:
+        return 0.0
+    caps = [
+        cap
+        for cap in (
+            product.max_purchase_amount,
+            product.purchase_limit_per_day,
+            product.purchase_limit_per_user,
+            product.left_quota,
+        )
+        if cap and cap > 0
+    ]
+    if caps:
+        amount = min(amount, min(caps))
+    return max(amount, 0.0)
 
 
 def _fetch_asset_prices(
