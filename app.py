@@ -235,15 +235,12 @@ def run_rebalance(args: argparse.Namespace) -> int:
         auditor.log_step(name="list_assets", status="info", detail=f"{listed_assets}{suffix}")
 
         asset_prices = _ensure_target_prices(client, asset_prices, refined_targets, args.quote)
-        symbols = _collect_symbols(full_snapshot, refined_targets, args.quote)
-        if symbols:
-            try:
-                exchange_filters = client.get_exchange_info(symbols=symbols)
-            except Exception as exc:
-                logger.warning("Failed to fetch filtered exchange info (%s); loading full listing.", exc)
-                exchange_filters = client.get_exchange_info()
-        else:
-            exchange_filters = client.get_exchange_info()
+        exchange_filters = client.get_exchange_info()
+        auditor.log_step(
+            name="exchange_info",
+            status="info",
+            detail=f"Loaded {len(exchange_filters)} symbols for filters",
+        )
         snapshot, dust_positions = filter_dust_positions(full_snapshot, exchange_filters, args.min_notional)
         if dust_positions:
             dust_detail = ", ".join(
@@ -309,7 +306,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
             final_snapshot = compute_current_weights(final_balances, latest_prices, args.quote)
             latest_balances = final_balances
         except Exception as exc:  # pragma: no cover - defensive refresh
-            logger.warning("Failed to refresh final balances: %s", exc)
+            detail = f"Failed to refresh final balances: {exc}"
+            auditor.log_step(name="final_balances", status="failed", detail=detail)
+            logger.warning(detail)
 
         _print_summary(full_snapshot, final_snapshot)
         if env_settings.simple_earn_enabled and simple_earn_by_asset:
@@ -557,14 +556,6 @@ def _ensure_target_prices(
             asset = symbol[: -len(quote_asset)]
             prices[asset] = price
     return prices
-
-
-def _collect_symbols(snapshot: PortfolioSnapshot, targets: Mapping[str, float], quote: str) -> list[str]:
-    quote_asset = quote.upper()
-    assets = set(targets.keys())
-    assets.update(snapshot.positions.keys())
-    symbols = [f"{asset}{quote_asset}" for asset in assets if asset != quote_asset]
-    return symbols
 
 
 def _print_run_detail(detail: Mapping[str, Any]) -> None:
