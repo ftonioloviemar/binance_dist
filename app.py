@@ -204,47 +204,17 @@ def run_rebalance(args: argparse.Namespace) -> int:
             logger.info("AI recommended maintaining allocations; stopping run.")
             return 0
 
-        if env_settings.simple_earn_enabled and simple_earn_positions:
-            _redeem_simple_earn_positions(
-                client=client,
-                positions=simple_earn_positions,
-                products_by_id=simple_earn_products,
-                fast=env_settings.simple_earn_fast_redeem,
-                dry_run=args.dry_run,
-                auditor=auditor,
-                pendings=pendings,
+        if not (balances or earn_balances):
+            auditor.log_step(
+                name="rebalance_source",
+                status="failed",
+                detail="No Spot or Simple Earn balances available",
             )
-            if not args.dry_run:
-                balances = client.get_account_balances()
-                auditor.log_step(
-                    name="fetch_assets_post_redeem",
-                    status="info",
-                    detail=f"Fetched {len(balances)} balances after Simple Earn redeem",
-                )
+            raise PortfolioError("No balances available to plan a rebalance")
 
-        rebalance_balances: Sequence[Balance] = balances
-        spot_effectively_empty = not balances or (args.dry_run and spot_total_value <= 0)
-        if spot_effectively_empty:
-            fallback_balances = earn_balances or (
-                _balances_from_earn(simple_earn_positions) if simple_earn_positions else []
-            )
-            if fallback_balances:
-                rebalance_balances = fallback_balances
-                auditor.log_step(
-                    name="rebalance_source",
-                    status="info",
-                    detail="Using Simple Earn balances as Spot source (Spot empty)",
-                )
-            else:
-                auditor.log_step(
-                    name="rebalance_source",
-                    status="failed",
-                    detail="No Spot or Simple Earn balances available",
-                )
-                raise PortfolioError("No balances available to plan a rebalance")
-
-        asset_prices = _fetch_asset_prices(client, rebalance_balances, refined_targets, args.quote)
-        full_snapshot = compute_current_weights(rebalance_balances, asset_prices, args.quote)
+        price_source = combined_balances or balances
+        asset_prices = _fetch_asset_prices(client, price_source, refined_targets, args.quote)
+        full_snapshot = compute_current_weights(price_source, asset_prices, args.quote)
         listed_assets = ", ".join(sorted(full_snapshot.positions.keys())[:20])
         suffix = " ..." if len(full_snapshot.positions) > 20 else ""
         auditor.log_step(name="list_assets", status="info", detail=f"{listed_assets}{suffix}")
@@ -302,7 +272,25 @@ def run_rebalance(args: argparse.Namespace) -> int:
             logger.info("No eligible trades after applying filters and notional limits.")
             return 0
 
-        available_balances = _init_available_balances(snapshot, full_snapshot, rebalance_balances)
+        execution_balances: Sequence[Balance] = balances
+        if env_settings.simple_earn_enabled and simple_earn_positions and trades:
+            _redeem_simple_earn_positions(
+                client=client,
+                positions=simple_earn_positions,
+                products_by_id=simple_earn_products,
+                fast=env_settings.simple_earn_fast_redeem,
+                dry_run=args.dry_run,
+                auditor=auditor,
+                pendings=pendings,
+            )
+            if not args.dry_run:
+                execution_balances = client.get_account_balances()
+                auditor.log_step(
+                    name="fetch_assets_post_redeem",
+                    status="info",
+                    detail=f"Fetched {len(execution_balances)} balances after Simple Earn redeem",
+                )
+        available_balances = _init_available_balances(snapshot, full_snapshot, execution_balances)
         auditor.log_step(name="execution", status="in_progress", detail=f"{len(trades)} trades planned")
         execute_trades(
             trades=trades,
@@ -442,7 +430,7 @@ def _map_products_by_asset(
         if not product.can_purchase:
             continue
         status = product.status.upper()
-        if status not in {"SUBSCRIBABLE", "LIVE"}:
+        if status not in {"SUBSCRIBABLE", "LIVE", "PURCHASING", "PURCHASABLE"}:
             continue
         mapping.setdefault(asset, product)
     return mapping
