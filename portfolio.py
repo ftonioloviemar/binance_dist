@@ -205,12 +205,24 @@ def _call_openrouter_model(
         "Content-Type": "application/json",
     }
 
-    try:
-        response = requests.post(OPENROUTER_ENDPOINT, json=payload, headers=headers, timeout=30)
-        response.raise_for_status()
-    except requests.RequestException as exc:  # pragma: no cover - network guard
-        logger.warning("OpenRouter request failed for model %s: %s", model_name, exc)
-        return {}, None, None
+    try_count = 0
+    while try_count < 2:
+        try:
+            response = requests.post(OPENROUTER_ENDPOINT, json=payload, headers=headers, timeout=30)
+            response.raise_for_status()
+            break
+        except requests.HTTPError as exc:
+            if exc.response is not None and exc.response.status_code == 429 and try_count == 0:
+                retry_after = _compute_retry_delay(exc.response)
+                logger.warning("OpenRouter 429 on model %s, retrying after %.1fs", model_name, retry_after)
+                time.sleep(retry_after)
+                try_count += 1
+                continue
+            logger.warning("OpenRouter request failed for model %s: %s", model_name, exc)
+            return {}, None, None
+        except requests.RequestException as exc:  # pragma: no cover - network guard
+            logger.warning("OpenRouter request failed for model %s: %s", model_name, exc)
+            return {}, None, None
 
     data = response.json()
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -471,6 +483,17 @@ def _normalize_action(action: str | None) -> str:
     if normalized.startswith(("maintain", "keep", "hold")):
         return "maintain"
     return "redistribute"
+
+
+def _compute_retry_delay(response: requests.Response) -> float:
+    retry_after = response.headers.get("Retry-After")
+    if retry_after is not None:
+        try:
+            delay = float(retry_after)
+            return max(delay, 1.0)
+        except ValueError:
+            return 3.0
+    return 3.0
 
 
 __all__ = [
