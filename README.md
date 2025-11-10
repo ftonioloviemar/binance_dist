@@ -39,7 +39,7 @@ uv run app.py audit --run-id <run_id_from_previous_command>
 ```
 
 ## Configuration & Security
-- Secrets via env vars: `BINANCE_API_KEY`, `BINANCE_API_SECRET`, optional `OPENROUTER_API_KEY`, `MODEL_NAME`, `MODEL_FALLBACK`, plus `TESTNET=true|false` to switch endpoints.
+- Secrets via env vars: `BINANCE_API_KEY`, `BINANCE_API_SECRET`, optional `OPENROUTER_API_KEY`, `MODEL_NAME`, `MODEL_FALLBACK`, plus `TESTNET=true|false` to switch endpoints. Grant **Spot**, **Universal Transfer**, and **Simple Earn** (Earn API) permissions to the key before running live; Binance rejeita resgates caso essa flag esteja ausente.
 - `.env` also controls operational defaults: dry-run flag, profile, drift/slippage/min-notional thresholds, target weights per profile, guardrails, bucket definitions (`BUCKETS_JSON`), and log retention (`LOG_RETENTION_DAYS`). Adjust it instead of editing Python files.
 - `config.toml` remains available for bucket overrides (e.g. `stable`, `alt`) if you prefer TOML.
 - Keys are never logged; failures are fatal if any mandatory variable is missing.
