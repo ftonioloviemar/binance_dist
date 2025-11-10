@@ -29,6 +29,7 @@ class EnvSettings:
     openrouter_api_key: str | None = None
     model_name: str | None = None
     model_fallback: str | None = None
+    model_second_fallback: str | None = None
     simple_earn_enabled: bool = False
     simple_earn_fast_redeem: bool = True
     simple_earn_exclude_assets: set[str] | None = None
@@ -68,6 +69,7 @@ def load_env_settings(recv_window: int) -> EnvSettings:
     openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
     model_name = os.getenv("MODEL_NAME", "openrouter/gpt-4o-mini")
     model_fallback = os.getenv("MODEL_FALLBACK", "qwen/qwen-2.5-7b-instruct:free")
+    model_second_fallback = os.getenv("MODEL_SECOND_FALLBACK", "openrouter/polaris-alpha")
     simple_earn_enabled = _parse_bool(os.getenv("SIMPLE_EARN_ENABLED", "false"))
     simple_earn_fast_redeem = _parse_bool(os.getenv("SIMPLE_EARN_FAST_REDEEM", "true"))
     exclude_assets = {
@@ -85,6 +87,7 @@ def load_env_settings(recv_window: int) -> EnvSettings:
         openrouter_api_key=openrouter_api_key,
         model_name=model_name,
         model_fallback=model_fallback,
+        model_second_fallback=model_second_fallback,
         simple_earn_enabled=simple_earn_enabled,
         simple_earn_fast_redeem=simple_earn_fast_redeem,
         simple_earn_exclude_assets=exclude_assets,

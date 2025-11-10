@@ -6,7 +6,8 @@ Production-ready CLI that connects to Binance Spot, evaluates portfolio drift, o
 - Deterministic CLI workflow with dry-run default and rich risk controls (drift, slippage, min-notional).
 - Modular architecture: env/config parsing, Binance REST client, portfolio math, execution planner, and audit logger.
 - Optional AI target refinement via OpenRouter with guardrails and safe fallbacks.
-- Simple Earn automation (optional): consolidate Spot + Earn, consult AI for “maintain vs redistribute”, redeem flexible positions, trade, and re-deposit idle balances respecting product limits.
+- Simple Earn automation (optional): consolidate Spot + Earn, consult AI for "maintain vs redistribute", redeem flexible positions, trade, and re-deposit idle balances respecting product limits.
+- Macro context enrichment: every run captures crypto market cap/dominance, fear & greed index, and BTC 24h stats to feed the AI decision.
 - Plain-text JSON log files (`logs/YYYYMMDD.log`) capture every run/step/order with automatic daily rotation.
 - pytest suite covering core math, decision logic, quantity rounding, and client signing.
 
@@ -39,7 +40,7 @@ uv run app.py audit --run-id <run_id_from_previous_command>
 ```
 
 ## Configuration & Security
-- Secrets via env vars: `BINANCE_API_KEY`, `BINANCE_API_SECRET`, optional `OPENROUTER_API_KEY`, `MODEL_NAME`, `MODEL_FALLBACK`, plus `TESTNET=true|false` to switch endpoints. Grant **Spot**, **Universal Transfer**, and **Simple Earn** (Earn API) permissions to the key before running live; Binance rejeita resgates caso essa flag esteja ausente.
+- Secrets via env vars: `BINANCE_API_KEY`, `BINANCE_API_SECRET`, optional `OPENROUTER_API_KEY`, `MODEL_NAME`, `MODEL_FALLBACK`, `MODEL_SECOND_FALLBACK`, plus `TESTNET=true|false` to switch endpoints. Grant **Spot**, **Universal Transfer**, and **Simple Earn** (Earn API) permissions to the key before running live; Binance rejeita resgates caso essa flag esteja ausente.
 - `.env` also controls operational defaults: dry-run flag, profile, drift/slippage/min-notional thresholds, target weights per profile, guardrails, bucket definitions (`BUCKETS_JSON`), and log retention (`LOG_RETENTION_DAYS`). Adjust it instead of editing Python files.
 - `config.toml` remains available for bucket overrides (e.g. `stable`, `alt`) if you prefer TOML.
 - Keys are never logged; failures are fatal if any mandatory variable is missing.

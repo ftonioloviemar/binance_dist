@@ -18,6 +18,7 @@ from config import (
 )
 from execution import execute_trades
 from logging_audit import AuditLogger, load_recent_runs, load_run_detail
+from macro_context import MacroSnapshot, fetch_macro_snapshot
 from portfolio import (
     AIAdvice,
     PortfolioError,
@@ -154,16 +155,30 @@ def run_rebalance(args: argparse.Namespace) -> int:
         price_source = combined_balances or balances
         asset_prices = _fetch_asset_prices(client, price_source, target_weights, args.quote)
         consolidated_snapshot = compute_current_weights(price_source, asset_prices, args.quote)
+        macro_snapshot = fetch_macro_snapshot()
+        if macro_snapshot.errors:
+            auditor.log_step(
+                name="macro_context",
+                status="warning",
+                detail="; ".join(macro_snapshot.errors[:3]),
+            )
+        else:
+            fg = macro_snapshot.data.get("fear_greed", {})
+            summary = fg.get("classification") or "ok"
+            auditor.log_step(name="macro_context", status="info", detail=f"Snapshot loaded ({summary})")
+
         holdings_context = _build_holdings_context(
             spot_balances=balances,
             earn_positions=simple_earn_positions,
             prices=asset_prices,
             quote=args.quote,
+            macro_snapshot=macro_snapshot,
         )
         spot_total_value = float(holdings_context.get("totals", {}).get("spot", 0.0))
         model_chain = [
             env_settings.model_name or "openrouter/gpt-4o-mini",
             env_settings.model_fallback,
+            env_settings.model_second_fallback,
         ]
         models = [model for model in model_chain if model]
         detail_msg = (
@@ -385,6 +400,7 @@ def _build_holdings_context(
     earn_positions: Sequence[SimpleEarnPosition],
     prices: Mapping[str, float],
     quote: str,
+    macro_snapshot: MacroSnapshot | None = None,
 ) -> Dict[str, Any]:
     context: Dict[str, Any] = {"spot": {}, "earn": {}, "totals": {"spot": 0.0, "earn": 0.0, "overall": 0.0}}
     quote_asset = quote.upper()
@@ -407,6 +423,8 @@ def _build_holdings_context(
         bucket["value"] += value
         context["totals"]["earn"] += value
     context["totals"]["overall"] = context["totals"]["spot"] + context["totals"]["earn"]
+    if macro_snapshot and macro_snapshot.data:
+        context["macro"] = macro_snapshot.data
     return context
 
 
