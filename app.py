@@ -16,6 +16,7 @@ from config import (
     parse_targets_arg,
     select_profile_targets,
 )
+from adaptive_strategy import get_adaptive_manager, MarketSentiment
 from execution import execute_trades
 from logging_audit import AuditLogger, load_recent_runs, load_run_detail
 from macro_context import MacroSnapshot, fetch_macro_snapshot
@@ -39,31 +40,63 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Binance portfolio rebalancing CLI")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
-    rebalance_parser = subcommands.add_parser("rebalance", help="Execute (or simulate) a rebalance run")
-    rebalance_parser.add_argument("--dry-run", default=defaults.dry_run, type=_parse_bool, help="Simulate only")
+    rebalance_parser = subcommands.add_parser(
+        "rebalance", help="Execute (or simulate) a rebalance run"
+    )
+    rebalance_parser.add_argument(
+        "--dry-run", default=defaults.dry_run, type=_parse_bool, help="Simulate only"
+    )
     rebalance_parser.add_argument(
         "--profile",
         default=defaults.profile,
         choices=["moderate", "aggressive", "conservative"],
         help="Risk profile for preset targets",
     )
-    rebalance_parser.add_argument("--targets", default=None, help="Manual targets mapping, e.g. btc=0.4,eth=0.2")
     rebalance_parser.add_argument(
-        "--drift", type=float, default=defaults.drift, help="Absolute drift threshold before triggering trades"
+        "--targets", default=None, help="Manual targets mapping, e.g. btc=0.4,eth=0.2"
     )
     rebalance_parser.add_argument(
-        "--max-slippage", type=float, default=defaults.max_slippage, help="Max tolerated slippage fraction"
+        "--drift",
+        type=float,
+        default=defaults.drift,
+        help="Absolute drift threshold before triggering trades",
     )
     rebalance_parser.add_argument(
-        "--min-notional", type=float, default=defaults.min_notional, help="Minimum notional per order"
+        "--max-slippage",
+        type=float,
+        default=defaults.max_slippage,
+        help="Max tolerated slippage fraction",
     )
-    rebalance_parser.add_argument("--quote", default=defaults.quote, help="Quote asset to trade against")
-    rebalance_parser.add_argument("--recv-window", type=int, default=5000, help="Binance recvWindow setting")
-    rebalance_parser.add_argument("--config-path", default="config.toml", help="Path to bucket configuration file")
+    rebalance_parser.add_argument(
+        "--min-notional",
+        type=float,
+        default=defaults.min_notional,
+        help="Minimum notional per order",
+    )
+    rebalance_parser.add_argument(
+        "--quote", default=defaults.quote, help="Quote asset to trade against"
+    )
+    rebalance_parser.add_argument(
+        "--recv-window", type=int, default=5000, help="Binance recvWindow setting"
+    )
+    rebalance_parser.add_argument(
+        "--config-path", default="config.toml", help="Path to bucket configuration file"
+    )
+    rebalance_parser.add_argument(
+        "--adaptive",
+        action="store_true",
+        help="Enable adaptive strategy based on market sentiment",
+    )
 
-    audit_parser = subcommands.add_parser("audit", help="Inspect past runs stored in SQLite logs")
-    audit_parser.add_argument("--run-id", help="Show detailed information for a specific run")
-    audit_parser.add_argument("--limit", type=int, default=5, help="Number of recent runs to list (default 5)")
+    audit_parser = subcommands.add_parser(
+        "audit", help="Inspect past runs stored in SQLite logs"
+    )
+    audit_parser.add_argument(
+        "--run-id", help="Show detailed information for a specific run"
+    )
+    audit_parser.add_argument(
+        "--limit", type=int, default=5, help="Number of recent runs to list (default 5)"
+    )
 
     normalized = _normalize_argv(argv)
     args = parser.parse_args(normalized)
@@ -71,7 +104,9 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s"
+    )
     args = parse_args(argv)
     if args.command == "audit":
         return run_audit(args)
@@ -97,7 +132,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
         recv_window=env_settings.recv_window,
     )
     auditor = AuditLogger()
-    config_snapshot = {
+
+    # Config snapshot will be updated after adaptive logic
+    initial_config_snapshot = {
         "profile": args.profile,
         "targets": target_weights,
         "dry_run": args.dry_run,
@@ -106,13 +143,16 @@ def run_rebalance(args: argparse.Namespace) -> int:
         "max_slippage": args.max_slippage,
         "min_notional": args.min_notional,
     }
-    config_snapshot["simple_earn"] = {
+    initial_config_snapshot["simple_earn"] = {
         "enabled": env_settings.simple_earn_enabled,
         "fast_redeem": env_settings.simple_earn_fast_redeem,
         "exclude": sorted(env_settings.simple_earn_exclude_assets or []),
     }
-    auditor.start_run(profile=args.profile, dry_run=args.dry_run, config_snapshot=config_snapshot)
-    auditor.log_step(name="connect_binance", status="info", detail=f"Endpoint {env_settings.base_url}")
+    auditor.log_step(
+        name="connect_binance",
+        status="info",
+        detail=f"Endpoint {env_settings.base_url}",
+    )
     pendings: list[str] = []
     simple_earn_positions: list[SimpleEarnPosition] = []
     simple_earn_products: dict[str, SimpleEarnProduct] = {}
@@ -120,7 +160,11 @@ def run_rebalance(args: argparse.Namespace) -> int:
 
     try:
         balances = client.get_account_balances()
-        auditor.log_step(name="fetch_assets", status="info", detail=f"Fetched {len(balances)} balances")
+        auditor.log_step(
+            name="fetch_assets",
+            status="info",
+            detail=f"Fetched {len(balances)} balances",
+        )
         if env_settings.simple_earn_enabled:
             try:
                 simple_earn_positions = client.get_simple_earn_flexible_positions()
@@ -136,7 +180,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
             try:
                 simple_earn_products = client.get_simple_earn_flexible_products()
                 exclude = env_settings.simple_earn_exclude_assets or set()
-                simple_earn_by_asset = _map_products_by_asset(simple_earn_products.values(), exclude)
+                simple_earn_by_asset = _map_products_by_asset(
+                    simple_earn_products.values(), exclude
+                )
                 auditor.log_step(
                     name="earn_products",
                     status="info",
@@ -148,24 +194,140 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 simple_earn_products = {}
                 simple_earn_by_asset = {}
 
-        earn_balances = _balances_from_earn(simple_earn_positions) if simple_earn_positions else []
+        earn_balances = (
+            _balances_from_earn(simple_earn_positions) if simple_earn_positions else []
+        )
         combined_balances = list(balances)
         if earn_balances:
             combined_balances.extend(earn_balances)
         price_source = combined_balances or balances
-        asset_prices = _fetch_asset_prices(client, price_source, target_weights, args.quote)
-        consolidated_snapshot = compute_current_weights(price_source, asset_prices, args.quote)
+        asset_prices = _fetch_asset_prices(
+            client, price_source, target_weights, args.quote
+        )
+        consolidated_snapshot = compute_current_weights(
+            price_source, asset_prices, args.quote
+        )
         macro_snapshot = fetch_macro_snapshot()
-        if macro_snapshot.errors:
-            auditor.log_step(
-                name="macro_context",
-                status="warning",
-                detail="; ".join(macro_snapshot.errors[:3]),
-            )
-        else:
-            fg = macro_snapshot.data.get("fear_greed", {})
-            summary = fg.get("classification") or "ok"
-            auditor.log_step(name="macro_context", status="info", detail=f"Snapshot loaded ({summary})")
+
+        # Adaptive Strategy Logic
+        adaptive_manager = get_adaptive_manager()
+        adaptive_config = None
+
+        if args.adaptive and not macro_snapshot.errors:
+            try:
+                fg = macro_snapshot.data.get("fear_greed", {})
+                btc_data = macro_snapshot.data.get("btc_24h", {})
+                crypto_global = macro_snapshot.data.get("crypto_global", {})
+
+                fear_greed_value = fg.get("value", 50)
+                fear_greed_classification = fg.get("classification", "Neutral")
+                btc_change_24h = btc_data.get("price_change_percent", 0.0)
+                market_cap_change_24h = crypto_global.get("market_cap_change_24h", 0.0)
+
+                # Determinar sentimento de mercado
+                current_sentiment = adaptive_manager.get_market_sentiment(
+                    fear_greed_value, fear_greed_classification
+                )
+
+                # Calcular configuração adaptativa
+                adaptive_config = adaptive_manager.calculate_adaptive_config(
+                    current_sentiment=current_sentiment,
+                    btc_change_24h=btc_change_24h,
+                    market_cap_change_24h=market_cap_change_24h,
+                    current_profile=args.profile,
+                )
+
+                # Aplicar configuração adaptativa
+                if adaptive_config:
+                    # Sobrescrever parâmetros
+                    args.drift = adaptive_config.drift_threshold
+                    args.max_slippage = adaptive_config.max_slippage
+
+                    # Sobrescrever targets se não forem explícitos
+                    if not explicit_targets:
+                        target_weights = adaptive_config.targets
+
+                        # Log da decisão adaptativa
+                        summary = adaptive_manager.get_recommendation_summary(
+                            adaptive_config,
+                            current_sentiment,
+                            fear_greed_value,
+                            btc_change_24h,
+                        )
+                        logger.info(summary)
+                        auditor.log_step(
+                            name="adaptive_strategy",
+                            status="info",
+                            detail=f"Adaptive config applied: {adaptive_config.profile.value} profile, "
+                            f"drift={adaptive_config.drift_threshold:.2%}, "
+                            f"sentiment={current_sentiment.value}",
+                        )
+
+                summary = fg.get("classification") or "ok"
+                auditor.log_step(
+                    name="macro_context",
+                    status="info",
+                    detail=f"Snapshot loaded ({summary})",
+                )
+
+            except Exception as e:
+                logger.warning(
+                    f"Adaptive strategy failed: {e}. Using standard parameters."
+                )
+                auditor.log_step(
+                    name="adaptive_strategy",
+                    status="failed",
+                    detail=f"Failed to apply adaptive strategy: {e}",
+                )
+                # Fallback para comportamento padrão
+                if macro_snapshot.errors:
+                    auditor.log_step(
+                        name="macro_context",
+                        status="warning",
+                        detail="; ".join(macro_snapshot.errors[:3]),
+                    )
+                else:
+                    fg = macro_snapshot.data.get("fear_greed", {})
+                    summary = fg.get("classification") or "ok"
+                    auditor.log_step(
+                        name="macro_context",
+                        status="info",
+                        detail=f"Snapshot loaded ({summary})",
+                    )
+
+        # Atualizar config snapshot com possíveis mudanças adaptativas
+        final_config_snapshot = initial_config_snapshot.copy()
+        final_config_snapshot.update(
+            {
+                "profile": args.profile,
+                "targets": target_weights,
+                "drift": args.drift,
+                "max_slippage": args.max_slippage,
+            }
+        )
+
+        auditor.start_run(
+            profile=args.profile,
+            dry_run=args.dry_run,
+            config_snapshot=final_config_snapshot,
+        )
+
+        # Comportamento padrão quando adaptive está desabilitado ou falha
+        if not args.adaptive or macro_snapshot.errors:
+            if macro_snapshot.errors:
+                auditor.log_step(
+                    name="macro_context",
+                    status="warning",
+                    detail="; ".join(macro_snapshot.errors[:3]),
+                )
+            else:
+                fg = macro_snapshot.data.get("fear_greed", {})
+                summary = fg.get("classification") or "ok"
+                auditor.log_step(
+                    name="macro_context",
+                    status="info",
+                    detail=f"Snapshot loaded ({summary})",
+                )
 
         holdings_context = _build_holdings_context(
             spot_balances=balances,
@@ -191,14 +353,19 @@ def run_rebalance(args: argparse.Namespace) -> int:
             api_key=env_settings.openrouter_api_key,
             models=models,
             portfolio_value=consolidated_snapshot.total_value,
-            current_weights={asset: pos.weight for asset, pos in consolidated_snapshot.positions.items()},
+            current_weights={
+                asset: pos.weight
+                for asset, pos in consolidated_snapshot.positions.items()
+            },
             proposed_weights=target_weights,
             portfolio_context=holdings_context,
         )
         refined_targets = advice.targets
         if advice.rationale:
             auditor.log_step(name="ai_consult", status="info", detail=advice.rationale)
-        auditor.log_step(name="ai_directive", status="info", detail=f"Action={advice.action}")
+        auditor.log_step(
+            name="ai_directive", status="info", detail=f"Action={advice.action}"
+        )
         if advice.action == "maintain":
             auditor.finalize_run("skipped")
             logger.info("AI recommended maintaining allocations; stopping run.")
@@ -213,25 +380,35 @@ def run_rebalance(args: argparse.Namespace) -> int:
             raise PortfolioError("No balances available to plan a rebalance")
 
         price_source = combined_balances or balances
-        asset_prices = _fetch_asset_prices(client, price_source, refined_targets, args.quote)
+        asset_prices = _fetch_asset_prices(
+            client, price_source, refined_targets, args.quote
+        )
         full_snapshot = compute_current_weights(price_source, asset_prices, args.quote)
         listed_assets = ", ".join(sorted(full_snapshot.positions.keys())[:20])
         suffix = " ..." if len(full_snapshot.positions) > 20 else ""
-        auditor.log_step(name="list_assets", status="info", detail=f"{listed_assets}{suffix}")
+        auditor.log_step(
+            name="list_assets", status="info", detail=f"{listed_assets}{suffix}"
+        )
 
-        asset_prices = _ensure_target_prices(client, asset_prices, refined_targets, args.quote)
+        asset_prices = _ensure_target_prices(
+            client, asset_prices, refined_targets, args.quote
+        )
         exchange_filters = client.get_exchange_info()
         auditor.log_step(
             name="exchange_info",
             status="info",
             detail=f"Loaded {len(exchange_filters)} symbols for filters",
         )
-        snapshot, dust_positions = filter_dust_positions(full_snapshot, exchange_filters, args.min_notional)
+        snapshot, dust_positions = filter_dust_positions(
+            full_snapshot, exchange_filters, args.min_notional
+        )
         if dust_positions:
             dust_detail = ", ".join(
                 f"{asset} ({pos.value:.2f})" for asset, pos in dust_positions.items()
             )
-            auditor.log_step(name="dust_filter", status="info", detail=f"Ignored: {dust_detail}")
+            auditor.log_step(
+                name="dust_filter", status="info", detail=f"Ignored: {dust_detail}"
+            )
         decision = decide_rebalance(snapshot, refined_targets, args.drift)
         auditor.log_step(
             name="decision",
@@ -263,13 +440,17 @@ def run_rebalance(args: argparse.Namespace) -> int:
         auditor.log_step(
             name="rebalance_check",
             status="info",
-            detail=f"{len(trades)} trades planned" if trades else "No trades required after filters",
+            detail=f"{len(trades)} trades planned"
+            if trades
+            else "No trades required after filters",
         )
         if not trades:
             if pendings:
                 _log_pendings(auditor, pendings)
             auditor.finalize_run("noop")
-            logger.info("No eligible trades after applying filters and notional limits.")
+            logger.info(
+                "No eligible trades after applying filters and notional limits."
+            )
             return 0
 
         execution_balances: Sequence[Balance] = balances
@@ -290,8 +471,14 @@ def run_rebalance(args: argparse.Namespace) -> int:
                     status="info",
                     detail=f"Fetched {len(execution_balances)} balances after Simple Earn redeem",
                 )
-        available_balances = _init_available_balances(snapshot, full_snapshot, execution_balances)
-        auditor.log_step(name="execution", status="in_progress", detail=f"{len(trades)} trades planned")
+        available_balances = _init_available_balances(
+            snapshot, full_snapshot, execution_balances
+        )
+        auditor.log_step(
+            name="execution",
+            status="in_progress",
+            detail=f"{len(trades)} trades planned",
+        )
         execute_trades(
             trades=trades,
             client=client,
@@ -300,13 +487,19 @@ def run_rebalance(args: argparse.Namespace) -> int:
             available_balances=available_balances,
             pendings=pendings,
         )
-        auditor.log_step(name="execution", status="completed", detail="Trades processed")
+        auditor.log_step(
+            name="execution", status="completed", detail="Trades processed"
+        )
         final_snapshot = snapshot
         latest_balances = balances
         try:
             final_balances = client.get_account_balances()
-            latest_prices = _fetch_asset_prices(client, final_balances, refined_targets, args.quote)
-            final_snapshot = compute_current_weights(final_balances, latest_prices, args.quote)
+            latest_prices = _fetch_asset_prices(
+                client, final_balances, refined_targets, args.quote
+            )
+            final_snapshot = compute_current_weights(
+                final_balances, latest_prices, args.quote
+            )
             latest_balances = final_balances
         except Exception as exc:  # pragma: no cover - defensive refresh
             detail = f"Failed to refresh final balances: {exc}"
@@ -355,8 +548,8 @@ def run_audit(args: argparse.Namespace) -> int:
     for run in runs:
         dry_flag = "DRY" if run.get("dry_run") else "LIVE"
         print(
-            f"{run['run_id']} | {run.get('started_at','-')} -> {run.get('completed_at','-')} | "
-            f"{run.get('status','pending')} | {dry_flag} | profile={run.get('profile','?')}"
+            f"{run['run_id']} | {run.get('started_at', '-')} -> {run.get('completed_at', '-')} | "
+            f"{run.get('status', 'pending')} | {dry_flag} | profile={run.get('profile', '?')}"
         )
     return 0
 
@@ -378,8 +571,13 @@ def _balances_from_earn(positions: Sequence[SimpleEarnPosition]) -> list[Balance
         amount = position.total_amount
         if amount <= 0:
             continue
-        aggregated[position.asset.upper()] = aggregated.get(position.asset.upper(), 0.0) + amount
-    return [Balance(asset=asset, free=amount, locked=0.0) for asset, amount in aggregated.items()]
+        aggregated[position.asset.upper()] = (
+            aggregated.get(position.asset.upper(), 0.0) + amount
+        )
+    return [
+        Balance(asset=asset, free=amount, locked=0.0)
+        for asset, amount in aggregated.items()
+    ]
 
 
 def _build_holdings_context(
@@ -390,7 +588,11 @@ def _build_holdings_context(
     quote: str,
     macro_snapshot: MacroSnapshot | None = None,
 ) -> Dict[str, Any]:
-    context: Dict[str, Any] = {"spot": {}, "earn": {}, "totals": {"spot": 0.0, "earn": 0.0, "overall": 0.0}}
+    context: Dict[str, Any] = {
+        "spot": {},
+        "earn": {},
+        "totals": {"spot": 0.0, "earn": 0.0, "overall": 0.0},
+    }
     quote_asset = quote.upper()
     for balance in spot_balances:
         asset = balance.asset.upper()
@@ -451,7 +653,9 @@ def _redeem_simple_earn_positions(
         if amount <= 0:
             continue
         product = products_by_id.get(position.product_id)
-        allow_fast = fast and ((product and product.can_fast_redeem) or position.can_fast_redeem)
+        allow_fast = fast and (
+            (product and product.can_fast_redeem) or position.can_fast_redeem
+        )
         detail = f"{position.asset} amount={amount:.8f} product={position.product_id}"
         if dry_run:
             auditor.log_step(name="earn_redeem", status="simulated", detail=detail)
@@ -494,7 +698,9 @@ def _subscribe_simple_earn_balances(
             auditor.log_step(name="earn_subscribe", status="simulated", detail=detail)
             continue
         try:
-            client.subscribe_simple_earn_flexible(product_id=product.product_id, amount=amount)
+            client.subscribe_simple_earn_flexible(
+                product_id=product.product_id, amount=amount
+            )
             auditor.log_step(name="earn_subscribe", status="completed", detail=detail)
         except Exception as exc:
             message = f"Subscribe {asset}: {exc}"
@@ -552,7 +758,9 @@ def _ensure_target_prices(
     quote: str,
 ) -> Dict[str, float]:
     quote_asset = quote.upper()
-    missing_assets = [asset for asset in targets if asset != quote_asset and asset not in prices]
+    missing_assets = [
+        asset for asset in targets if asset != quote_asset and asset not in prices
+    ]
     if not missing_assets:
         return prices
     pairs = [f"{asset}{quote_asset}" for asset in missing_assets]
@@ -574,7 +782,7 @@ def _print_run_detail(detail: Mapping[str, Any]) -> None:
             snapshot = {}
     print(f"Run: {run['run_id']}")
     print(
-        f"Started: {run['started_at']}  Completed: {run.get('completed_at','-')}  Status: {run.get('status','pending')}  "
+        f"Started: {run['started_at']}  Completed: {run.get('completed_at', '-')}  Status: {run.get('status', 'pending')}  "
         f"Profile: {run['profile']}  Dry-run: {bool(run['dry_run'])}"
     )
     if snapshot:
@@ -582,7 +790,9 @@ def _print_run_detail(detail: Mapping[str, Any]) -> None:
     if detail["steps"]:
         print("Steps:")
         for step in detail["steps"]:
-            print(f"  {step['timestamp']} | {step['name']} | {step['status']} | {step['detail']}")
+            print(
+                f"  {step['timestamp']} | {step['name']} | {step['status']} | {step['detail']}"
+            )
     if detail["orders"]:
         print("Orders:")
         for order in detail["orders"]:
@@ -599,14 +809,14 @@ def _normalize_argv(argv: Sequence[str] | None) -> list[str]:
     return tokens
 
 
-
-
 def _init_available_balances(
     snapshot: PortfolioSnapshot,
     full_snapshot: PortfolioSnapshot,
     balances: Sequence[Balance],
 ) -> Dict[str, float]:
-    available: Dict[str, float] = {asset: pos.quantity for asset, pos in snapshot.positions.items()}
+    available: Dict[str, float] = {
+        asset: pos.quantity for asset, pos in snapshot.positions.items()
+    }
     quote = snapshot.quote_asset
     if quote in full_snapshot.positions:
         available[quote] = full_snapshot.positions[quote].quantity
