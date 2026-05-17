@@ -20,6 +20,7 @@ This directory is the source of truth for repository work items.
 - TDD implementation cards must name the expected RED failure and verification command.
 - Before starting a new card in the same session, use `mcp context-mode` for focused context recovery, then reload `AGENTS.md`, `docs/project-continuity.md`, `docs/STATE.md`, this README, the active card, and at most 1-2 directly cited docs.
 - Use native Codex compaction when useful, but persist task-critical state in `docs/STATE.md` or the card before relying on compaction.
+- Use `grill-with-docs` when a card depends on fuzzy strategy/domain/workflow terms. Capture stable trading vocabulary in `CONTEXT.md` and workflow terms in `docs/project-continuity.md`.
 - Move card files between directories when state changes.
 - Commit each completed card before starting the next card unless the user explicitly asks to hold commits.
 - Do not execute cards in `00_pending_approval` without user approval.

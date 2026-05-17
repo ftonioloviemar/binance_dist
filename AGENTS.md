@@ -16,12 +16,14 @@ These rules apply to agents and tools working in this repository.
 - Work is tracked in the internal kanban under `workflow/kanban/`, not GitHub Issues.
 - Use `docs/project-continuity.md` as the canonical workflow/orchestration guide.
 - Use `docs/STATE.md` as the short current-state and handoff file for native Codex compaction or new chats.
+- Use `CONTEXT.md` for stable trading/domain terminology. Do not put workflow terms there.
 - Use `SKILLS.md` as the local skill catalog and trigger map.
 - For behavior changes, follow TDD: failing test first, minimal implementation, verification, then refactor.
 - For non-trivial TDD cards, use a clean-context specialist subagent to define or validate the test contract before implementation and a separate specialist to audit results before closing.
 - Keep work in small cards that can be verified and committed independently.
 - When a card is done, move the file to the matching kanban state directory; editing status text is not enough.
 - Commit every completed card before starting the next one, unless the user explicitly asks to hold commits. If prior work was accumulated before this rule, make a clearly described catch-up commit and then resume one-commit-per-card.
+- At task close, check whether a reusable rule, test, helper, agent instruction, skill trigger, or follow-up card should be captured before moving on.
 
 ## Context Economy
 
@@ -30,6 +32,13 @@ These rules apply to agents and tools working in this repository.
 - In Windows/PowerShell, prefer `mcp__context_mode__.ctx_execute_file`, `ctx_index`, or focused `ctx_search` over dumping whole files into context. Use `ctx_batch_execute` mainly for concise command batches and indexed searches.
 - Do not repeat long results already captured in `docs/STATE.md`, kanban cards, or docs; reference the file and continue.
 - Context-mode is not mandatory inside subagents. Instead, prompts to subagents must include or point to the minimal rules and active-card context they need.
+
+## Domain And Docs
+
+- Use `grill-with-docs` when strategy, workflow, or domain language is fuzzy, overloaded, or likely to become a durable rule.
+- When `grill-with-docs` resolves a stable domain term, update `CONTEXT.md` immediately. Use ADRs sparingly and only for hard-to-reverse decisions with real trade-offs.
+- Keep tool-specific wrappers such as `CLAUDE.md` and `.github/copilot-instructions.md` thin; they should point back to canonical repo docs.
+- Use `docs/model-selection.md` when choosing coordinator/subagent model strength.
 
 ## Trading Safety
 

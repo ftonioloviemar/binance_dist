@@ -7,6 +7,7 @@ Canonical sources:
 - `AGENTS.md`
 - `README.md`
 - `SKILLS.md`
+- `CONTEXT.md`
 - `docs/STATE.md`
 - `docs/project-continuity.md`
 - the active card under `workflow/kanban/`
@@ -26,6 +27,7 @@ Use this loop for each task or coherent milestone:
 8. Move completed or cancelled cards to the correct kanban directory.
 9. Commit each completed card before starting the next one, unless the user explicitly asks to hold commits.
 10. If a session already accumulated multiple completed cards before this rule was applied, create a clearly described catch-up commit, then return to one commit per card.
+11. At closeout, review whether the task produced a reusable rule, test, helper, agent instruction, skill trigger, glossary term, or follow-up card.
 
 ## Context And Compaction Policy
 
@@ -58,19 +60,21 @@ Use skills only when they reduce ambiguity, risk, or context cost:
 - `superpowers:systematic-debugging`: root-cause work for failures such as audit decoding, rejected orders, or strategy not activating.
 - `superpowers:subagent-driven-development`: implementation plans with independent cards and review gates.
 - `superpowers:writing-plans`: multi-step implementation plans before code.
-- `grill-with-docs`: unclear workflow/domain terms or strategy decisions that must become durable docs.
+- `grill-with-docs`: unclear strategy, workflow, or domain terms that must become durable docs. Stable trading/domain terms go to `CONTEXT.md`; workflow/orchestration terms stay here or in `workflow/kanban/README.md`.
 - `setup-matt-pocock-skills`: refresh `docs/agents/` if the tracker/domain layout changes.
 - `security-best-practices` and `security-threat-model`: changes involving API keys, live trading, permissions, or account safety.
+- `zoom-out`: inspect how a module fits the trading flow before changing localized behavior.
 
 ## Domain Notes
 
 This is a Binance Spot portfolio rebalancer with optional OpenRouter target refinement and Simple Earn automation.
 
-Keep strategy docs separate from workflow docs:
+Keep strategy docs separate from workflow docs and domain glossary:
 
 - Workflow/orchestration terms stay in this file and `workflow/kanban/README.md`.
 - Trading strategy choices should be documented under `docs/strategy-*.md`.
-- Create `CONTEXT.md` only when stable domain vocabulary needs a glossary.
+- Stable domain vocabulary lives in `CONTEXT.md`.
+- Tool-specific wrappers (`CLAUDE.md`, `.github/copilot-instructions.md`) stay thin and point back to canonical docs.
 
 ## Safety Defaults
 
