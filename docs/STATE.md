@@ -1,0 +1,31 @@
+# Current State
+
+Last updated: 2026-05-17.
+
+## Purpose
+
+Short continuity file for native Codex compaction and new chats. Keep this file concise; detailed evidence belongs in kanban cards, audit logs, tests, or strategy docs.
+
+## Current Baseline
+
+- Repository workflow source of truth: `workflow/kanban/`.
+- Agent entrypoints: `AGENTS.md`, `docs/project-continuity.md`, `SKILLS.md`, this file, active card.
+- Default verification: `uv run pytest`.
+- Trading validation default: unit tests, audit/log replay, and dry-run only.
+- Commit rule: commit each completed card before starting the next one unless the user explicitly asks to hold commits.
+
+## Context Economy
+
+- Before starting each new task in the same session, use focused `mcp context-mode` lookup, then reload the canonical docs and active card.
+- Prefer `ctx_execute_file`, `ctx_index`, and focused `ctx_search` for large files or history.
+- Use native Codex compaction when the context grows, but persist important handoff state here or in the active card first.
+
+## Latest Verified State
+
+- Last catch-up commit: `6f18b9f chore: catch up completed binance_dist tasks`.
+- Latest full test evidence before this docs update: `uv run pytest` -> 30 passed.
+- OpenRouter model fallback and event-driven auto-curation are implemented and documented.
+
+## Known Follow-Up
+
+- Dry-run still logs `final_balances` warning when final balance refresh sees an empty portfolio. This is visible in the daily monitor and remains a candidate for a future card.

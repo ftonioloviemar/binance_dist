@@ -7,6 +7,7 @@ Canonical sources:
 - `AGENTS.md`
 - `README.md`
 - `SKILLS.md`
+- `docs/STATE.md`
 - `docs/project-continuity.md`
 - the active card under `workflow/kanban/`
 - docs explicitly referenced by the active card
@@ -15,7 +16,7 @@ Canonical sources:
 
 Use this loop for each task or coherent milestone:
 
-1. Reload `AGENTS.md`, this file, `SKILLS.md`, `workflow/kanban/README.md`, and the active card.
+1. Before starting a new task in the same session, run a focused `mcp context-mode` lookup for relevant indexed history. Then reload `AGENTS.md`, this file, `SKILLS.md`, `docs/STATE.md`, `workflow/kanban/README.md`, the active card, and at most 1-2 canonical docs cited by the card.
 2. Classify the card: TDD implementation, docs-only, investigation, strategy decision, or trading-sensitive.
 3. For TDD implementation, define the test contract before production code. The contract must state expected behavior, files/tests, command, RED failure, acceptance criteria, edge cases, and forbidden shortcuts.
 4. Use specialist subagents when they reduce risk or context load. For non-trivial behavior changes, use one specialist for the test contract and a separate one for result audit.
@@ -25,6 +26,14 @@ Use this loop for each task or coherent milestone:
 8. Move completed or cancelled cards to the correct kanban directory.
 9. Commit each completed card before starting the next one, unless the user explicitly asks to hold commits.
 10. If a session already accumulated multiple completed cards before this rule was applied, create a clearly described catch-up commit, then return to one commit per card.
+
+## Context And Compaction Policy
+
+- Use context-mode to query indexed history or large files without loading everything into the live context.
+- Prefer `mcp__context_mode__.ctx_execute_file`, `ctx_index`, and focused `ctx_search` on Windows. Avoid broad full-file reads unless the file is small and directly needed.
+- Native Codex compaction is allowed and expected when the context grows. Before compaction or chat handoff, write only durable, task-relevant state to `docs/STATE.md` or the active card.
+- `docs/STATE.md` must stay short: current objective, active/next card, latest verification, known blockers, and the next safe command. Do not turn it into a full session log.
+- A final context-mode checkpoint is optional. Use it only when there is concrete continuity risk before ending the session, switching chats, or starting a broad new task.
 
 ## Kanban Policy
 
