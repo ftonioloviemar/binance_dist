@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from binance_client import BinanceClient, create_signature
+from binance_client import BinanceClient, SymbolFilters, create_signature
 
 
 class FakeResponse:
@@ -52,3 +52,43 @@ def test_signed_request_includes_signature() -> None:
     assert balances[0].asset == "BTC"
     assert session.last_params is not None
     assert "signature" in session.last_params
+
+
+def test_symbol_filters_prefers_notional_minimum_over_min_notional() -> None:
+    filters = SymbolFilters.from_exchange(
+        {
+            "symbol": "ADAUSDT",
+            "filters": [
+                {"filterType": "LOT_SIZE", "stepSize": "0.1", "minQty": "0.1", "maxQty": "100000"},
+                {"filterType": "PRICE_FILTER", "tickSize": "0.0001"},
+                {"filterType": "MIN_NOTIONAL", "minNotional": "1.0"},
+                {
+                    "filterType": "NOTIONAL",
+                    "minNotional": "5.0",
+                    "maxNotional": "10000.0",
+                    "applyMinToMarket": True,
+                    "applyMaxToMarket": False,
+                },
+            ],
+        }
+    )
+
+    assert filters.min_notional == 5.0
+    assert filters.max_notional == 10000.0
+
+
+def test_symbol_filters_keeps_min_notional_when_it_is_more_restrictive() -> None:
+    filters = SymbolFilters.from_exchange(
+        {
+            "symbol": "BNBUSDT",
+            "filters": [
+                {"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001", "maxQty": "100000"},
+                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                {"filterType": "MIN_NOTIONAL", "minNotional": "10.0"},
+                {"filterType": "NOTIONAL", "maxNotional": "50000.0"},
+            ],
+        }
+    )
+
+    assert filters.min_notional == 10.0
+    assert filters.max_notional == 50000.0

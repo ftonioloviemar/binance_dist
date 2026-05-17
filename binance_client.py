@@ -25,6 +25,7 @@ class SymbolFilters:
     max_qty: float
     min_notional: float
     price_tick: float
+    max_notional: float = 0.0
 
     @classmethod
     def from_exchange(cls, payload: Mapping[str, Any]) -> "SymbolFilters":
@@ -32,13 +33,20 @@ class SymbolFilters:
         lot = filters.get("LOT_SIZE", {})
         price = filters.get("PRICE_FILTER", {})
         min_notional = filters.get("MIN_NOTIONAL", {})
+        notional = filters.get("NOTIONAL", {})
+        minimum_notional = max(
+            float(min_notional.get("minNotional", "0")),
+            float(notional.get("minNotional", "0")),
+        )
+        maximum_notional = float(notional.get("maxNotional", "0"))
         return cls(
             symbol=str(payload["symbol"]),
             lot_step=float(lot.get("stepSize", "1")),
             min_qty=float(lot.get("minQty", "0")),
             max_qty=float(lot.get("maxQty", "0")),
-            min_notional=float(min_notional.get("minNotional", "0")),
+            min_notional=minimum_notional,
             price_tick=float(price.get("tickSize", "0.01")),
+            max_notional=maximum_notional,
         )
 
 

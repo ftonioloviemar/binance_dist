@@ -40,7 +40,9 @@ uv run app.py audit --run-id <run_id_from_previous_command>
 ```
 
 ## Configuration & Security
-- Secrets via env vars: `BINANCE_API_KEY`, `BINANCE_API_SECRET`, optional `OPENROUTER_API_KEY`, `MODEL_NAME`, `MODEL_FALLBACK`, `MODEL_SECOND_FALLBACK`, plus `TESTNET=true|false` to switch endpoints. Grant **Spot**, **Universal Transfer**, and **Simple Earn** (Earn API) permissions to the key before running live; Binance rejeita resgates caso essa flag esteja ausente.
+- Secrets via env vars: `BINANCE_API_KEY`, `BINANCE_API_SECRET`, optional `OPENROUTER_API_KEY`, `OPENROUTER_MODELS`, plus `TESTNET=true|false` to switch endpoints. Grant **Spot**, **Universal Transfer**, and **Simple Earn** (Earn API) permissions to the key before running live; Binance rejeita resgates caso essa flag esteja ausente.
+- `OPENROUTER_MODELS` is an ordered best-to-worst fallback chain for AI target refinement. Separate model IDs with comma, semicolon, or newline; there is no hard model-count limit. Legacy `MODEL_NAME`, `MODEL_FALLBACK`, and `MODEL_SECOND_FALLBACK` are still accepted only when `OPENROUTER_MODELS` is absent.
+- OpenRouter model curation is event-driven. When the first active model fails, the run falls back through the configured list, then refreshes the current free-model catalog and writes a reordered registry to `state/openrouter_models.json` for future runs. Set `OPENROUTER_MODELS_MODE=manual` to ignore the registry and force the literal `OPENROUTER_MODELS` list.
 - `.env` also controls operational defaults: dry-run flag, profile, drift/slippage/min-notional thresholds, target weights per profile, guardrails, bucket definitions (`BUCKETS_JSON`), and log retention (`LOG_RETENTION_DAYS`). Adjust it instead of editing Python files.
 - `config.toml` remains available for bucket overrides (e.g. `stable`, `alt`) if you prefer TOML.
 - Keys are never logged; failures are fatal if any mandatory variable is missing.
@@ -58,6 +60,10 @@ Each run appends JSON lines to `logs/YYYYMMDD.log` (one file per day, rotated by
 - `uv run app.py audit --limit 5` for a quick summary taken from the latest logs.
 - `uv run app.py audit --run-id <id>` for detailed steps/orders reconstructed from the log file.
 Both dry-run and live executions follow the same audit trail for parity.
+
+## Workflow
+Project workflow is tracked in `workflow/kanban/`; agent and skill rules live in `AGENTS.md`, `docs/project-continuity.md`, and `SKILLS.md`.
+Strategy experiments should be selected from `docs/strategy-improvement-options.md` before changing live allocation behavior. Current selected next scenario: Scenario B, threshold rebalancing with volatility and transaction-cost guard.
 
 ## Testing
 ```bash

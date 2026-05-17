@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import requests
 
 from binance_client import Balance, SymbolFilters
 from portfolio import (
@@ -12,6 +13,7 @@ from portfolio import (
     compute_current_weights,
     decide_rebalance,
     validate_target_map,
+    ai_refine_targets,
 )
 
 
@@ -74,6 +76,123 @@ def test_build_trades_respects_lot_step() -> None:
     assert pytest.approx(btc_trade.quantity / step) == round(btc_trade.quantity / step)
 
 
+def test_build_trades_skips_below_effective_exchange_notional() -> None:
+    snapshot = PortfolioSnapshot(
+        quote_asset="USDT",
+        total_value=1000.0,
+        positions={
+            "ADA": AssetPosition(asset="ADA", quantity=100.0, price=1.0, value=100.0, weight=0.1),
+            "USDT": AssetPosition(asset="USDT", quantity=900.0, price=1.0, value=900.0, weight=0.9),
+        },
+    )
+    decision = RebalanceDecision(rebalance_needed=True, deltas={"ADA": 0.004})
+    filters = {
+        "ADAUSDT": SymbolFilters(
+            symbol="ADAUSDT",
+            lot_step=0.1,
+            min_qty=0.1,
+            max_qty=100000.0,
+            min_notional=5.0,
+            price_tick=0.0001,
+        )
+    }
+    rejections: list[str] = []
+
+    trades = build_trades(
+        snapshot=snapshot,
+        decision=decision,
+        prices={"ADA": 1.0},
+        filters=filters,
+        min_notional=0.0,
+        max_slippage=0.003,
+        rejections=rejections,
+    )
+
+    assert trades == []
+    assert rejections == ["ADAUSDT: notional 4.0000 < min 5.0"]
+
+
+def test_build_trades_skips_above_exchange_max_notional() -> None:
+    snapshot = PortfolioSnapshot(
+        quote_asset="USDT",
+        total_value=1000.0,
+        positions={
+            "ADA": AssetPosition(asset="ADA", quantity=100.0, price=1.0, value=100.0, weight=0.1),
+            "USDT": AssetPosition(asset="USDT", quantity=900.0, price=1.0, value=900.0, weight=0.9),
+        },
+    )
+    decision = RebalanceDecision(rebalance_needed=True, deltas={"ADA": 0.02})
+    filters = {
+        "ADAUSDT": SymbolFilters(
+            symbol="ADAUSDT",
+            lot_step=0.1,
+            min_qty=0.1,
+            max_qty=100000.0,
+            min_notional=5.0,
+            max_notional=10.0,
+            price_tick=0.0001,
+        )
+    }
+    rejections: list[str] = []
+
+    trades = build_trades(
+        snapshot=snapshot,
+        decision=decision,
+        prices={"ADA": 1.0},
+        filters=filters,
+        min_notional=0.0,
+        max_slippage=0.003,
+        rejections=rejections,
+    )
+
+    assert trades == []
+    assert rejections == ["ADAUSDT: notional 20.0000 > max 10.0"]
+
+
+def test_build_trades_allows_exact_notional_boundaries() -> None:
+    snapshot = PortfolioSnapshot(
+        quote_asset="USDT",
+        total_value=1000.0,
+        positions={
+            "ADA": AssetPosition(asset="ADA", quantity=100.0, price=1.0, value=100.0, weight=0.1),
+            "USDT": AssetPosition(asset="USDT", quantity=900.0, price=1.0, value=900.0, weight=0.9),
+        },
+    )
+    filters = {
+        "ADAUSDT": SymbolFilters(
+            symbol="ADAUSDT",
+            lot_step=0.1,
+            min_qty=0.1,
+            max_qty=100000.0,
+            min_notional=5.0,
+            max_notional=10.0,
+            price_tick=0.0001,
+        )
+    }
+
+    min_trades = build_trades(
+        snapshot=snapshot,
+        decision=RebalanceDecision(rebalance_needed=True, deltas={"ADA": 0.005}),
+        prices={"ADA": 1.0},
+        filters=filters,
+        min_notional=0.0,
+        max_slippage=0.003,
+        rejections=[],
+    )
+    max_trades = build_trades(
+        snapshot=snapshot,
+        decision=RebalanceDecision(rebalance_needed=True, deltas={"ADA": 0.01}),
+        prices={"ADA": 1.0},
+        filters=filters,
+        min_notional=0.0,
+        max_slippage=0.003,
+        rejections=[],
+    )
+
+    assert [trade.notional for trade in min_trades] == [5.0]
+    assert [trade.notional for trade in max_trades] == [10.0]
+
+
 def test_validate_target_map_rejects_negative_weights() -> None:
     with pytest.raises(PortfolioError):
         validate_target_map({"BTC": -0.1, "ETH": 1.1})
@@ -82,3 +201,59 @@ def test_validate_target_map_rejects_negative_weights() -> None:
 def test_validate_target_map_normalizes_sum_to_one() -> None:
     normalized = validate_target_map({"BTC": 40, "ETH": 60})
     assert pytest.approx(sum(normalized.values()), rel=1e-6) == 1.0
+
+
+def test_ai_refine_targets_records_first_model_failure_and_fallback_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        def __init__(self, status_code: int, payload: dict[str, object] | None = None):
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.headers: dict[str, str] = {}
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise requests.HTTPError(
+                    f"{self.status_code} error", response=self
+                )
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+    calls: list[str] = []
+
+    def fake_post(_url: str, json: dict[str, object], **_kwargs: object) -> FakeResponse:
+        model = str(json["model"])
+        calls.append(model)
+        if model == "broken/primary:free":
+            return FakeResponse(404)
+        return FakeResponse(
+            200,
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"action":"redistribute","targets":{"BTC":0.4,"USDT":0.6},"rationale":"fallback ok"}'
+                        }
+                    }
+                ]
+            },
+        )
+
+    monkeypatch.setattr("portfolio.requests.post", fake_post)
+
+    advice = ai_refine_targets(
+        api_key="key",
+        models=("broken/primary:free", "working/fallback:free"),
+        portfolio_value=1000.0,
+        current_weights={"BTC": 0.5, "USDT": 0.5},
+        proposed_weights={"BTC": 0.4, "USDT": 0.6},
+    )
+
+    assert calls == ["broken/primary:free", "working/fallback:free"]
+    assert advice.model_used == "working/fallback:free"
+    assert advice.first_model_failed is True
+    assert advice.model_failures[0].model == "broken/primary:free"
+    assert advice.model_failures[0].status_code == 404
+    assert advice.rationale == "fallback ok"

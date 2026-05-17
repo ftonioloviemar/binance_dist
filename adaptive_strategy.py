@@ -223,6 +223,12 @@ class AdaptiveStrategyManager:
         if total > 0:
             for asset in base_targets:
                 base_targets[asset] = round(base_targets[asset] / total, 4)
+            residual = round(1.0 - sum(base_targets.values()), 4)
+            if residual:
+                largest_asset = max(base_targets, key=base_targets.get)
+                base_targets[largest_asset] = round(
+                    base_targets[largest_asset] + residual, 4
+                )
 
         # Calcular parâmetros dinâmicos
         drift_threshold = self.base_drift * sentiment_config["drift_multiplier"]

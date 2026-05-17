@@ -14,6 +14,7 @@ from datetime import datetime
 import os
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
+os.makedirs("logs", exist_ok=True)
 
 # Configurar logging com encoding UTF-8 para Windows
 logging.basicConfig(
@@ -39,6 +40,18 @@ EMOJIS = {
     "tip": "💡" if sys.platform != "win32" else "[TIP]",
     "sad": "😞" if sys.platform != "win32" else "[ERROR]",
 }
+
+
+def _console_safe(text: str) -> str:
+    encoding = sys.stdout.encoding or "utf-8"
+    return text.encode(encoding, errors="replace").decode(encoding)
+
+
+def _log_output_lines(level: int, header: str, text: str) -> None:
+    logger.log(level, _console_safe(header))
+    for line in text.split("\n"):
+        if line.strip():
+            logger.log(level, "   %s", _console_safe(line))
 
 
 def run_adaptive_rebalance(dry_run: bool = False) -> int:
@@ -81,31 +94,12 @@ def run_adaptive_rebalance(dry_run: bool = False) -> int:
 
         # Processar saída
         if result.stdout:
-            logger.info("📊 Saída do comando:")
-            for line in result.stdout.split("\n"):
-                if line.strip():
-                    # Limpar caracteres de escape problemáticos
-                    clean_line = line.replace("\u0001f4ca", "[ANALYSIS]")
-                    clean_line = clean_line.replace("\u26a0\ufe0f", "[WARNING]")
-                    clean_line = clean_line.replace("\u2699\ufe0f", "[SETTINGS]")
-                    clean_line = clean_line.replace("\u0001f3af", "[TARGET]")
-                    clean_line = clean_line.replace("\u0001f4c8", "[TREND]")
-                    clean_line = clean_line.replace("\u0001f3ad", "[PROFILE]")
-                    clean_line = clean_line.replace("\u0001f4cb", "[ALLOCATION]")
-                    clean_line = clean_line.replace("\u0001f4a1", "[RATIONALE]")
-                    clean_line = clean_line.replace("\u0001f389", "[SUCCESS]")
-                    clean_line = clean_line.replace("\u0001f4c8", "[MARKET]")
-                    clean_line = clean_line.replace("\u0001f504", "[REPEAT]")
-                    logger.info(f"   {clean_line}")
+            _log_output_lines(logging.INFO, "Saida do comando:", result.stdout)
 
         if result.stderr:
-            logger.warning(f"{EMOJIS['warning']} Avisos/Logs:")
-            for line in result.stderr.split("\n"):
-                if line.strip():
-                    clean_line = line.replace("\u0001f4ca", "[ANALYSIS]")
-                    clean_line = clean_line.replace("\u26a0\ufe0f", "[WARNING]")
-                    # etc...
-                    logger.warning(f"   {clean_line}")
+            _log_output_lines(
+                logging.WARNING, f"{EMOJIS['warning']} Avisos/Logs:", result.stderr
+            )
 
         logger.info(
             f"{EMOJIS['success']} Rebalanceamento adaptativo concluído com sucesso!"
@@ -117,16 +111,10 @@ def run_adaptive_rebalance(dry_run: bool = False) -> int:
         logger.error(f"   Código de saída: {e.returncode}")
 
         if e.stdout:
-            logger.error("📊 Saída padrão:")
-            for line in e.stdout.split("\n"):
-                if line.strip():
-                    logger.error(f"   {line}")
+            _log_output_lines(logging.ERROR, "Saida padrao:", e.stdout)
 
         if e.stderr:
-            logger.error("📋 Erros:")
-            for line in e.stderr.split("\n"):
-                if line.strip():
-                    logger.error(f"   {line}")
+            _log_output_lines(logging.ERROR, "Erros:", e.stderr)
 
         return e.returncode
 

@@ -73,6 +73,25 @@ class AIAdvice:
     targets: Dict[str, float]
     action: str
     rationale: str | None = None
+    model_used: str | None = None
+    model_failures: tuple["AIModelFailure", ...] = ()
+    first_model_failed: bool = False
+
+
+@dataclass(slots=True)
+class AIModelFailure:
+    model: str
+    error_type: str
+    detail: str
+    status_code: int | None = None
+
+
+@dataclass(slots=True)
+class OpenRouterModelResult:
+    weights: Dict[str, float]
+    rationale: str | None
+    action: str | None
+    failure: AIModelFailure | None = None
 
 
 class PortfolioError(RuntimeError):
@@ -145,8 +164,9 @@ def ai_refine_targets(
         return default_advice
 
     rationale: str | None = None
+    failures: list[AIModelFailure] = []
     for model_name in models:
-        weights, rationale, action = _call_openrouter_model(
+        result = _call_openrouter_model(
             api_key=api_key,
             model_name=model_name,
             portfolio_value=portfolio_value,
@@ -154,11 +174,30 @@ def ai_refine_targets(
             proposed_weights=proposed_weights,
             portfolio_context=portfolio_context,
         )
+        if result.failure:
+            failures.append(result.failure)
+            continue
+        weights = result.weights
+        rationale = result.rationale
+        action = result.action
         if weights or action:
             guarded = _apply_ai_guardrails(weights or proposed_weights, proposed_weights)
             normalized_action = _normalize_action(action)
-            return AIAdvice(targets=guarded, action=normalized_action, rationale=rationale)
-    return default_advice
+            return AIAdvice(
+                targets=guarded,
+                action=normalized_action,
+                rationale=rationale,
+                model_used=model_name,
+                model_failures=tuple(failures),
+                first_model_failed=bool(failures and failures[0].model == models[0]),
+            )
+    return AIAdvice(
+        targets=dict(proposed_weights),
+        action="redistribute",
+        rationale=None,
+        model_failures=tuple(failures),
+        first_model_failed=bool(failures and failures[0].model == models[0]),
+    )
 
 
 def _call_openrouter_model(
@@ -169,7 +208,7 @@ def _call_openrouter_model(
     current_weights: Mapping[str, float],
     proposed_weights: Mapping[str, float],
     portfolio_context: Mapping[str, Any] | None = None,
-) -> tuple[Dict[str, float], str | None, str | None]:
+) -> OpenRouterModelResult:
     context_payload: Dict[str, Any] = {
         "currentWeights": current_weights,
         "proposedWeights": proposed_weights,
@@ -219,15 +258,61 @@ def _call_openrouter_model(
                 try_count += 1
                 continue
             logger.warning("OpenRouter request failed for model %s: %s", model_name, exc)
-            return {}, None, None
+            status_code = exc.response.status_code if exc.response is not None else None
+            return OpenRouterModelResult(
+                weights={},
+                rationale=None,
+                action=None,
+                failure=AIModelFailure(
+                    model=model_name,
+                    error_type=f"http_{status_code}" if status_code else "http_error",
+                    detail=str(exc),
+                    status_code=status_code,
+                ),
+            )
         except requests.RequestException as exc:  # pragma: no cover - network guard
             logger.warning("OpenRouter request failed for model %s: %s", model_name, exc)
-            return {}, None, None
+            return OpenRouterModelResult(
+                weights={},
+                rationale=None,
+                action=None,
+                failure=AIModelFailure(
+                    model=model_name,
+                    error_type="request_error",
+                    detail=str(exc),
+                    status_code=None,
+                ),
+            )
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError as exc:
+        return OpenRouterModelResult(
+            weights={},
+            rationale=None,
+            action=None,
+            failure=AIModelFailure(
+                model=model_name,
+                error_type="invalid_json_response",
+                detail=str(exc),
+                status_code=None,
+            ),
+        )
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
     weights, rationale, action = _extract_plan_from_message(content)
-    return weights, rationale, action
+    if not weights and not action:
+        return OpenRouterModelResult(
+            weights={},
+            rationale=None,
+            action=None,
+            failure=AIModelFailure(
+                model=model_name,
+                error_type="invalid_model_output",
+                detail="OpenRouter response did not contain action or target weights",
+                status_code=None,
+            ),
+        )
+    return OpenRouterModelResult(weights=weights, rationale=rationale, action=action)
 
 
 def decide_rebalance(
@@ -299,6 +384,9 @@ def build_trades(
         required_notional = max(min_notional, symbol_filters.min_notional)
         if notional < required_notional:
             reject_log.append(f"{symbol}: notional {notional:.4f} < min {required_notional}")
+            continue
+        if symbol_filters.max_notional > 0 and notional > symbol_filters.max_notional:
+            reject_log.append(f"{symbol}: notional {notional:.4f} > max {symbol_filters.max_notional}")
             continue
         order_type, limit_price = _select_order_type(
             price=price,
@@ -498,6 +586,7 @@ def _compute_retry_delay(response: requests.Response) -> float:
 
 __all__ = [
     "AIAdvice",
+    "AIModelFailure",
     "AssetPosition",
     "ExecutionResult",
     "filter_dust_positions",

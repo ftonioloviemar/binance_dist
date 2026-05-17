@@ -1,0 +1,37 @@
+# Project Instructions
+
+These rules apply to agents and tools working in this repository.
+
+## General Rules
+
+- Always read the project documentation and skill guidance before deciding.
+- Before changing files, check available disk space and create a backup or rollback point when reversal would be costly.
+- If you do not know, say "nao sei" clearly.
+- Do not invent commands, parameters, URLs, exchange rules, or API behavior.
+- Consider the real environment before running commands. This repo is operated mostly from Windows/PowerShell with `uv`.
+- Do not revert user or parallel-chat changes without an explicit request.
+
+## Canonical Workflow
+
+- Work is tracked in the internal kanban under `workflow/kanban/`, not GitHub Issues.
+- Use `docs/project-continuity.md` as the canonical workflow/orchestration guide.
+- Use `SKILLS.md` as the local skill catalog and trigger map.
+- For behavior changes, follow TDD: failing test first, minimal implementation, verification, then refactor.
+- For non-trivial TDD cards, use a clean-context specialist subagent to define or validate the test contract before implementation and a separate specialist to audit results before closing.
+- Keep work in small cards that can be verified and committed independently.
+- When a card is done, move the file to the matching kanban state directory; editing status text is not enough.
+- Commit every completed card before starting the next one, unless the user explicitly asks to hold commits. If prior work was accumulated before this rule, make a clearly described catch-up commit and then resume one-commit-per-card.
+
+## Trading Safety
+
+- Do not run live trading, live redemption, or live subscription commands just to validate a code change unless the user explicitly approves that execution.
+- Prefer dry-run, unit tests, and log replay for validation.
+- Treat API keys, account balances, order history, and strategy parameters as sensitive.
+- Any strategy change that can materially alter live allocation must be documented and selected by the user before implementation.
+
+## Verification
+
+- Default test command: `uv run pytest`.
+- For audit/log behavior, prefer tests over editing historical logs.
+- For exchange behavior, verify against official Binance documentation and the local parser/client code.
+- Before a commit, review `git status`, the diff, and the verification evidence.

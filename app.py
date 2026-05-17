@@ -22,6 +22,7 @@ from logging_audit import AuditLogger, load_recent_runs, load_run_detail
 from macro_context import MacroSnapshot, fetch_macro_snapshot
 from portfolio import (
     AIAdvice,
+    AIModelFailure,
     PortfolioError,
     PortfolioSnapshot,
     ai_refine_targets,
@@ -31,6 +32,7 @@ from portfolio import (
     filter_dust_positions,
     validate_target_map,
 )
+from openrouter_model_curator import refresh_openrouter_models
 
 logger = logging.getLogger("rebalance")
 
@@ -132,6 +134,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
         recv_window=env_settings.recv_window,
     )
     auditor = AuditLogger()
+    run_started = False
 
     # Config snapshot will be updated after adaptive logic
     initial_config_snapshot = {
@@ -148,11 +151,6 @@ def run_rebalance(args: argparse.Namespace) -> int:
         "fast_redeem": env_settings.simple_earn_fast_redeem,
         "exclude": sorted(env_settings.simple_earn_exclude_assets or []),
     }
-    auditor.log_step(
-        name="connect_binance",
-        status="info",
-        detail=f"Endpoint {env_settings.base_url}",
-    )
     pendings: list[str] = []
     simple_earn_positions: list[SimpleEarnPosition] = []
     simple_earn_products: dict[str, SimpleEarnProduct] = {}
@@ -212,6 +210,8 @@ def run_rebalance(args: argparse.Namespace) -> int:
         # Adaptive Strategy Logic
         adaptive_manager = get_adaptive_manager()
         adaptive_config = None
+        adaptive_failure_detail: str | None = None
+        current_sentiment: MarketSentiment | None = None
 
         if args.adaptive and not macro_snapshot.errors:
             try:
@@ -255,51 +255,23 @@ def run_rebalance(args: argparse.Namespace) -> int:
                             btc_change_24h,
                         )
                         logger.info(summary)
-                        auditor.log_step(
-                            name="adaptive_strategy",
-                            status="info",
-                            detail=f"Adaptive config applied: {adaptive_config.profile.value} profile, "
-                            f"drift={adaptive_config.drift_threshold:.2%}, "
-                            f"sentiment={current_sentiment.value}",
-                        )
 
                 summary = fg.get("classification") or "ok"
-                auditor.log_step(
-                    name="macro_context",
-                    status="info",
-                    detail=f"Snapshot loaded ({summary})",
-                )
 
             except Exception as e:
                 logger.warning(
                     f"Adaptive strategy failed: {e}. Using standard parameters."
                 )
-                auditor.log_step(
-                    name="adaptive_strategy",
-                    status="failed",
-                    detail=f"Failed to apply adaptive strategy: {e}",
-                )
-                # Fallback para comportamento padrão
-                if macro_snapshot.errors:
-                    auditor.log_step(
-                        name="macro_context",
-                        status="warning",
-                        detail="; ".join(macro_snapshot.errors[:3]),
-                    )
-                else:
-                    fg = macro_snapshot.data.get("fear_greed", {})
-                    summary = fg.get("classification") or "ok"
-                    auditor.log_step(
-                        name="macro_context",
-                        status="info",
-                        detail=f"Snapshot loaded ({summary})",
-                    )
+                adaptive_failure_detail = f"Failed to apply adaptive strategy: {e}"
 
         # Atualizar config snapshot com possíveis mudanças adaptativas
+        effective_profile = (
+            adaptive_config.profile.value if adaptive_config else args.profile
+        )
         final_config_snapshot = initial_config_snapshot.copy()
         final_config_snapshot.update(
             {
-                "profile": args.profile,
+                "profile": effective_profile,
                 "targets": target_weights,
                 "drift": args.drift,
                 "max_slippage": args.max_slippage,
@@ -307,10 +279,33 @@ def run_rebalance(args: argparse.Namespace) -> int:
         )
 
         auditor.start_run(
-            profile=args.profile,
+            profile=effective_profile,
             dry_run=args.dry_run,
             config_snapshot=final_config_snapshot,
         )
+        run_started = True
+        auditor.log_step(
+            name="connect_binance",
+            status="info",
+            detail=f"Endpoint {env_settings.base_url}",
+        )
+        if adaptive_config:
+            targets_changed = "false" if explicit_targets else "true"
+            auditor.log_step(
+                name="adaptive_strategy",
+                status="info",
+                detail=f"Adaptive config applied: {adaptive_config.profile.value} profile, "
+                f"drift={adaptive_config.drift_threshold:.2%}, "
+                f"slippage={adaptive_config.max_slippage:.2%}, "
+                f"sentiment={current_sentiment.value}, "
+                f"targets_changed={targets_changed}",
+            )
+        elif adaptive_failure_detail:
+            auditor.log_step(
+                name="adaptive_strategy",
+                status="failed",
+                detail=adaptive_failure_detail,
+            )
 
         # Comportamento padrão quando adaptive está desabilitado ou falha
         if not args.adaptive or macro_snapshot.errors:
@@ -328,6 +323,14 @@ def run_rebalance(args: argparse.Namespace) -> int:
                     status="info",
                     detail=f"Snapshot loaded ({summary})",
                 )
+        else:
+            fg = macro_snapshot.data.get("fear_greed", {})
+            summary = fg.get("classification") or "ok"
+            auditor.log_step(
+                name="macro_context",
+                status="info",
+                detail=f"Snapshot loaded ({summary})",
+            )
 
         holdings_context = _build_holdings_context(
             spot_balances=balances,
@@ -337,14 +340,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
             macro_snapshot=macro_snapshot,
         )
         spot_total_value = float(holdings_context.get("totals", {}).get("spot", 0.0))
-        model_chain = [
-            env_settings.model_name or "openrouter/gpt-4o-mini",
-            env_settings.model_fallback,
-            env_settings.model_second_fallback,
-        ]
-        models = [model for model in model_chain if model]
+        models = list(env_settings.openrouter_models)
         detail_msg = (
-            "Consulting AI models on consolidated holdings"
+            f"Consulting {len(models)} AI model(s) on consolidated holdings"
             if models and env_settings.openrouter_api_key
             else "Skipping AI (no API key configured)"
         )
@@ -363,6 +361,45 @@ def run_rebalance(args: argparse.Namespace) -> int:
         refined_targets = advice.targets
         if advice.rationale:
             auditor.log_step(name="ai_consult", status="info", detail=advice.rationale)
+        for failure in advice.model_failures:
+            status = f" status={failure.status_code}" if failure.status_code else ""
+            auditor.log_step(
+                name="ai_model_failure",
+                status="warning",
+                detail=f"{failure.model} {failure.error_type}{status}: {failure.detail}",
+            )
+        if advice.model_used:
+            auditor.log_step(
+                name="ai_model_used",
+                status="info",
+                detail=advice.model_used,
+            )
+        if advice.first_model_failed and models:
+            first_failure = advice.model_failures[0] if advice.model_failures else None
+            failed_primary_model = first_failure.model if first_failure else models[0]
+            failure_reason = (
+                f"{first_failure.error_type}: {first_failure.detail}"
+                if first_failure
+                else "unknown first model failure"
+            )
+            try:
+                refresh_openrouter_models(
+                    api_key=env_settings.openrouter_api_key,
+                    current_models=models,
+                    failed_primary_model=failed_primary_model,
+                    failure_reason=failure_reason,
+                )
+                auditor.log_step(
+                    name="openrouter_model_refresh",
+                    status="completed",
+                    detail=f"Refreshed after first model failure: {failed_primary_model}",
+                )
+            except Exception as exc:
+                auditor.log_step(
+                    name="openrouter_model_refresh",
+                    status="warning",
+                    detail=f"Refresh skipped/failed after first model failure: {exc}",
+                )
         auditor.log_step(
             name="ai_directive", status="info", detail=f"Action={advice.action}"
         )
@@ -523,7 +560,8 @@ def run_rebalance(args: argparse.Namespace) -> int:
         auditor.log_exception(error=str(exc))
         if pendings:
             _log_pendings(auditor, pendings)
-        auditor.finalize_run("failed")
+        if run_started:
+            auditor.finalize_run("failed")
         logger.exception("Rebalance run failed")
         return 1
     finally:

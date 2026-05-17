@@ -230,7 +230,7 @@ class _AuditLogReader:
 
     def _iter_records_newest_first(self) -> Iterable[dict[str, Any]]:
         for path in sorted(self.logs_dir.glob("*.log"), reverse=True):
-            with path.open("r", encoding="utf-8") as handle:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
                 lines = handle.readlines()
             for line in reversed(lines):
                 record = _parse_line(line)
@@ -239,7 +239,7 @@ class _AuditLogReader:
 
     def _iter_records_oldest_first(self) -> Iterable[dict[str, Any]]:
         for path in sorted(self.logs_dir.glob("*.log")):
-            with path.open("r", encoding="utf-8") as handle:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
                 for line in handle:
                     record = _parse_line(line)
                     if record:

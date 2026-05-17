@@ -12,3 +12,4 @@ wheels/
 # Local run artifacts
 .env
 logs/
+state/

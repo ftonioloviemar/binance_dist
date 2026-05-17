@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable
@@ -17,6 +18,33 @@ PROFILE_TARGET_FALLBACKS = {
     "conservative": "BTC=0.35,ETH=0.15,SOL=0.05,ALT=0.05,STABLE=0.40",
 }
 STABLE_ASSETS_FALLBACK = "USDT,USDC,BUSD,TUSD,FDUSD,DAI"
+DEFAULT_OPENROUTER_MODEL_REGISTRY_PATH = Path("state/openrouter_models.json")
+DEFAULT_OPENROUTER_FREE_MODELS = (
+    "openrouter/owl-alpha",
+    "nvidia/nemotron-3-super-120b-a12b:free",
+    "deepseek/deepseek-v4-flash:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "google/gemma-4-31b-it:free",
+    "google/gemma-4-26b-a4b-it:free",
+    "openai/gpt-oss-120b:free",
+    "nousresearch/hermes-3-llama-3.1-405b:free",
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "z-ai/glm-4.5-air:free",
+    "arcee-ai/trinity-large-thinking:free",
+    "minimax/minimax-m2.5:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
+    "nvidia/nemotron-nano-9b-v2:free",
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    "nvidia/nemotron-nano-12b-v2-vl:free",
+    "poolside/laguna-m.1:free",
+    "poolside/laguna-xs.2:free",
+    "baidu/cobuddy:free",
+    "openai/gpt-oss-20b:free",
+    "liquid/lfm-2.5-1.2b-thinking:free",
+    "liquid/lfm-2.5-1.2b-instruct:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "openrouter/free",
+)
 
 
 @dataclass(slots=True)
@@ -27,6 +55,7 @@ class EnvSettings:
     base_url: str
     recv_window: int
     openrouter_api_key: str | None = None
+    openrouter_models: tuple[str, ...] = ()
     model_name: str | None = None
     model_fallback: str | None = None
     model_second_fallback: str | None = None
@@ -67,9 +96,10 @@ def load_env_settings(recv_window: int) -> EnvSettings:
     base_url = "https://testnet.binance.vision" if testnet else "https://api.binance.com"
 
     openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-    model_name = os.getenv("MODEL_NAME", "openrouter/gpt-4o-mini")
-    model_fallback = os.getenv("MODEL_FALLBACK", "qwen/qwen-2.5-7b-instruct:free")
-    model_second_fallback = os.getenv("MODEL_SECOND_FALLBACK", "openrouter/polaris-alpha")
+    openrouter_models = _load_openrouter_models()
+    model_name = openrouter_models[0] if openrouter_models else None
+    model_fallback = openrouter_models[1] if len(openrouter_models) > 1 else None
+    model_second_fallback = openrouter_models[2] if len(openrouter_models) > 2 else None
     simple_earn_enabled = _parse_bool(os.getenv("SIMPLE_EARN_ENABLED", "false"))
     simple_earn_fast_redeem = _parse_bool(os.getenv("SIMPLE_EARN_FAST_REDEEM", "true"))
     exclude_assets = {
@@ -85,6 +115,7 @@ def load_env_settings(recv_window: int) -> EnvSettings:
         base_url=base_url,
         recv_window=recv_window,
         openrouter_api_key=openrouter_api_key,
+        openrouter_models=openrouter_models,
         model_name=model_name,
         model_fallback=model_fallback,
         model_second_fallback=model_second_fallback,
@@ -227,7 +258,70 @@ def _parse_bool(value: str) -> bool:
     raise ConfigError(f"Invalid boolean value '{value}'")
 
 
+def _load_openrouter_models() -> tuple[str, ...]:
+    registry_models = _load_openrouter_model_registry()
+    if registry_models:
+        return registry_models
+
+    raw_models = os.getenv("OPENROUTER_MODELS")
+    if raw_models is not None:
+        models = _parse_model_list(raw_models)
+        if not models:
+            raise ConfigError("OPENROUTER_MODELS must contain at least one model id")
+        return models
+
+    legacy_chain = _parse_model_list(
+        ",".join(
+            value
+            for value in (
+                os.getenv("MODEL_NAME", ""),
+                os.getenv("MODEL_FALLBACK", ""),
+                os.getenv("MODEL_SECOND_FALLBACK", ""),
+            )
+            if value.strip()
+        )
+    )
+    if legacy_chain:
+        return legacy_chain
+    return DEFAULT_OPENROUTER_FREE_MODELS
+
+
+def _load_openrouter_model_registry() -> tuple[str, ...]:
+    if os.getenv("OPENROUTER_MODELS_MODE", "").strip().lower() == "manual":
+        return ()
+    registry_path = Path(
+        os.getenv(
+            "OPENROUTER_MODELS_REGISTRY",
+            str(DEFAULT_OPENROUTER_MODEL_REGISTRY_PATH),
+        )
+    )
+    if not registry_path.exists():
+        return ()
+    try:
+        data = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ()
+    raw_models = data.get("active_models", [])
+    if not isinstance(raw_models, list):
+        return ()
+    return tuple(str(model).strip() for model in raw_models if str(model).strip())
+
+
+def _parse_model_list(raw: str) -> tuple[str, ...]:
+    seen: set[str] = set()
+    models: list[str] = []
+    for token in re.split(r"[,;\n\r]+", raw):
+        model = token.strip()
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        models.append(model)
+    return tuple(models)
+
+
 __all__ = [
+    "DEFAULT_OPENROUTER_MODEL_REGISTRY_PATH",
+    "DEFAULT_OPENROUTER_FREE_MODELS",
     "BucketConfig",
     "CliDefaults",
     "ConfigError",
