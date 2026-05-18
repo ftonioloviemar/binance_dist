@@ -260,3 +260,81 @@ def test_rebalance_triggers_openrouter_refresh_when_primary_model_fails(
     assert refresh_calls
     assert refresh_calls[0]["failed_primary_model"] == "broken/primary:free"
     assert refresh_calls[0]["current_models"][0] == "broken/primary:free"
+
+
+def test_rebalance_skips_failed_final_balances_refresh_in_dry_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    class EmptyFinalBalancesClient(FakeClient):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+            self._balance_calls = 0
+
+        def get_account_balances(self) -> list[Balance]:
+            self._balance_calls += 1
+            if self._balance_calls == 1:
+                return super().get_account_balances()
+            return []
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(app, "BinanceClient", EmptyFinalBalancesClient)
+    monkeypatch.setattr(
+        app,
+        "load_env_settings",
+        lambda recv_window: EnvSettings(
+            api_key="key",
+            api_secret="secret",
+            testnet=False,
+            base_url="https://api.binance.com",
+            recv_window=recv_window,
+            openrouter_api_key="openrouter-key",
+            openrouter_models=("working/model:free",),
+        ),
+    )
+    monkeypatch.setattr(
+        app,
+        "fetch_macro_snapshot",
+        lambda: MacroSnapshot(
+            data={
+                "fear_greed": {"value": 25, "classification": "Fear"},
+                "btc_24h": {"price_change_percent": -2.0},
+                "crypto_global": {"market_cap_change_24h": -1.0},
+            },
+            errors=[],
+        ),
+    )
+    monkeypatch.setattr(
+        app,
+        "ai_refine_targets",
+        lambda **kwargs: AIAdvice(
+            targets={"BTC": 0.1, "USDT": 0.9},
+            action="redistribute",
+            rationale="test redistribute",
+        ),
+    )
+
+    args = argparse.Namespace(
+        command="rebalance",
+        dry_run=True,
+        profile="moderate",
+        drift=0.01,
+        max_slippage=0.003,
+        min_notional=0.0,
+        targets=None,
+        quote="USDT",
+        recv_window=5000,
+        config_path=Path("missing.toml"),
+        adaptive=True,
+    )
+
+    assert app.run_rebalance(args) == 0
+    [run] = app.load_recent_runs(limit=1, logs_dir=tmp_path / "logs")
+    detail = load_run_detail(run["run_id"], logs_dir=tmp_path / "logs")
+
+    assert detail is not None
+    final_step = next(
+        step for step in detail["steps"] if step["name"] == "final_balances"
+    )
+    assert final_step["status"] == "skipped"
+    assert "empty portfolio" in final_step["detail"].lower()
+    assert run["status"] == "completed"

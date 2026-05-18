@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-05-17.
+Last updated: 2026-05-18.
 
 ## Purpose
 
@@ -28,9 +28,12 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Last catch-up commit: `6f18b9f chore: catch up completed binance_dist tasks`.
 - Latest workflow commit: `f687d19 docs: add context economy workflow`.
 - Latest skill-alignment commit: `8d82cd8 docs: align grill workflow practices`.
-- Latest full test evidence before this docs update: `uv run pytest` -> 30 passed.
+- Latest full test evidence before this docs update: `uv run pytest` -> 31 passed.
 - OpenRouter model fallback and event-driven auto-curation are implemented and documented.
+- Current active card: none.
+- Latest completed card: `TASK-012` to treat empty final balances as expected in dry-run.
+- Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up
 
-- Dry-run still logs `final_balances` warning when final balance refresh sees an empty portfolio. This is visible in the daily monitor and remains a candidate for a future card.
+- No current blocker. The dry-run `final_balances` empty-portfolio warning was addressed in `TASK-012`.

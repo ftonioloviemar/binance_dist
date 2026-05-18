@@ -538,6 +538,17 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 final_balances, latest_prices, args.quote
             )
             latest_balances = final_balances
+        except PortfolioError as exc:
+            detail = f"Failed to refresh final balances: {exc}"
+            if args.dry_run and "empty portfolio" in str(exc).lower():
+                detail = f"Skipped final balances refresh in dry-run: {exc}"
+                auditor.log_step(
+                    name="final_balances", status="skipped", detail=detail
+                )
+                logger.info(detail)
+            else:
+                auditor.log_step(name="final_balances", status="failed", detail=detail)
+                logger.warning(detail)
         except Exception as exc:  # pragma: no cover - defensive refresh
             detail = f"Failed to refresh final balances: {exc}"
             auditor.log_step(name="final_balances", status="failed", detail=detail)
