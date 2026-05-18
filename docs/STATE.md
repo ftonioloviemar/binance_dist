@@ -15,6 +15,7 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Trading validation default: unit tests, audit/log replay, and dry-run only.
 - Commit rule: commit each completed card before starting the next one unless the user explicitly asks to hold commits.
 - Use `grill-with-docs` for fuzzy strategy/domain/workflow language; update `CONTEXT.md` for stable trading terms.
+- Catalogoantigo-adjacent skills installed in Codex home: `caveman`, `handoff`, `diagnose`, `improve-codebase-architecture`. Restart Codex for active skill list refresh.
 
 ## Context Economy
 
@@ -26,6 +27,7 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 - Last catch-up commit: `6f18b9f chore: catch up completed binance_dist tasks`.
 - Latest workflow commit: `f687d19 docs: add context economy workflow`.
+- Latest skill-alignment commit: `8d82cd8 docs: align grill workflow practices`.
 - Latest full test evidence before this docs update: `uv run pytest` -> 30 passed.
 - OpenRouter model fallback and event-driven auto-curation are implemented and documented.
 
