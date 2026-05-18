@@ -20,6 +20,7 @@ These rules apply to agents and tools working in this repository.
 - Use `SKILLS.md` as the local skill catalog and trigger map.
 - For behavior changes, follow TDD: failing test first, minimal implementation, verification, then refactor.
 - For non-trivial TDD cards, use a clean-context specialist subagent to define or validate the test contract before implementation and a separate specialist to audit results before closing.
+- For other repeated task types, use reusable specialist subagents only when `docs/subagent-specialist-matrix.md` predicts precision/context/cost gain. Prefer the cheapest adequate model/reasoning class, but do not downshift when it would create rework or trading risk.
 - Keep work in small cards that can be verified and committed independently.
 - When a card is done, move the file to the matching kanban state directory; editing status text is not enough.
 - Commit every completed card before starting the next one, unless the user explicitly asks to hold commits. If prior work was accumulated before this rule, make a clearly described catch-up commit and then resume one-commit-per-card.
@@ -32,6 +33,7 @@ These rules apply to agents and tools working in this repository.
 - In Windows/PowerShell, prefer `mcp__context_mode__.ctx_execute_file`, `ctx_index`, or focused `ctx_search` over dumping whole files into context. Use `ctx_batch_execute` mainly for concise command batches and indexed searches.
 - Do not repeat long results already captured in `docs/STATE.md`, kanban cards, or docs; reference the file and continue.
 - Context-mode is not mandatory inside subagents. Instead, prompts to subagents must include or point to the minimal rules and active-card context they need.
+- The coordinator must evaluate subagent output before applying it, and recalibrate future model/reasoning choices when a subagent is too weak, too expensive, or assigned to the wrong role.
 
 ## Domain And Docs
 

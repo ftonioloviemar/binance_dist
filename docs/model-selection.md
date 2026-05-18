@@ -14,6 +14,8 @@ Use enough intelligence to avoid rework, then reduce cost where the task is boun
 - Use subagents to reduce context load or provide independent review, not for parallelism alone.
 - Prompts must include minimal context: `AGENTS.md`, `docs/project-continuity.md`, `docs/STATE.md`, active card, and cited docs.
 - If a cheap subagent result would require substantial rework or verification by the coordinator, use a stronger model instead.
+- Use `docs/subagent-specialist-matrix.md` to choose reusable specialist type, model class, reasoning level, and recalibration rule.
+- Prefer the cheapest model class that can satisfy the task without increasing expected rework. Promote after repeated misses; demote after repeated overkill.
 
 ## Context Policy
 

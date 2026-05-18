@@ -20,7 +20,7 @@ Use this loop for each task or coherent milestone:
 1. Before starting a new task in the same session, run a focused `mcp context-mode` lookup for relevant indexed history. Then reload `AGENTS.md`, this file, `SKILLS.md`, `docs/STATE.md`, `workflow/kanban/README.md`, the active card, and at most 1-2 canonical docs cited by the card.
 2. Classify the card: TDD implementation, docs-only, investigation, strategy decision, or trading-sensitive.
 3. For TDD implementation, define the test contract before production code. The contract must state expected behavior, files/tests, command, RED failure, acceptance criteria, edge cases, and forbidden shortcuts.
-4. Use specialist subagents when they reduce risk or context load. For non-trivial behavior changes, use one specialist for the test contract and a separate one for result audit.
+4. Use specialist subagents when they reduce risk, context load, or repeated reasoning. Follow `docs/subagent-specialist-matrix.md`; do not dispatch subagents for blind parallelism.
 5. Implement one small slice at a time. Do not combine unrelated fixes.
 6. Verify with the command named in the card, normally `uv run pytest`.
 7. Update durable docs or the kanban card with evidence and follow-up tasks.
@@ -59,6 +59,7 @@ Use skills only when they reduce ambiguity, risk, or context cost:
 - `superpowers:test-driven-development`: every feature, bugfix, refactor, or behavior change.
 - `superpowers:systematic-debugging`: root-cause work for failures such as audit decoding, rejected orders, or strategy not activating.
 - `superpowers:subagent-driven-development`: implementation plans with independent cards and review gates.
+- `docs/subagent-specialist-matrix.md`: reusable specialist subagent matrix, model/reasoning classes, and recalibration loop.
 - `superpowers:writing-plans`: multi-step implementation plans before code.
 - `grill-with-docs`: unclear strategy, workflow, or domain terms that must become durable docs. Stable trading/domain terms go to `CONTEXT.md`; workflow/orchestration terms stay here or in `workflow/kanban/README.md`.
 - `setup-matt-pocock-skills`: refresh `docs/agents/` if the tracker/domain layout changes.

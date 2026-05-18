@@ -38,5 +38,5 @@ Use this catalog to decide which available Codex/project skills apply in this re
 
 - The issue tracker for this repo is `workflow/kanban/`, not GitHub Issues.
 - TDD cards should name the exact test file and command.
-- Subagents are useful for non-trivial behavior changes, but avoid them for simple docs-only edits.
+- Subagents are useful when `docs/subagent-specialist-matrix.md` predicts precision/context/cost gain. Avoid them for simple docs-only edits or ambiguous tasks that need coordinator decisions first.
 - Locally installed catalogoantigo-adjacent skills are `grill-with-docs`, `setup-matt-pocock-skills`, `zoom-out`, `caveman`, `handoff`, `diagnose`, and `improve-codebase-architecture`. Restart Codex after installation so the session skill list refreshes.
