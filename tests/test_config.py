@@ -15,6 +15,8 @@ def test_load_env_settings_uses_ordered_free_openrouter_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required_binance_env(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_MODELS_MODE", "manual")
+    monkeypatch.delenv("OPENROUTER_MODELS_REGISTRY", raising=False)
     monkeypatch.delenv("OPENROUTER_MODELS", raising=False)
     monkeypatch.delenv("MODEL_NAME", raising=False)
     monkeypatch.delenv("MODEL_FALLBACK", raising=False)
@@ -37,6 +39,8 @@ def test_load_env_settings_accepts_unlimited_openrouter_models(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required_binance_env(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_MODELS_MODE", "manual")
+    monkeypatch.delenv("OPENROUTER_MODELS_REGISTRY", raising=False)
     monkeypatch.setenv(
         "OPENROUTER_MODELS",
         "model/a:free, model/b:free\nmodel/c:free; model/d:free",
@@ -56,6 +60,8 @@ def test_load_env_settings_keeps_legacy_model_chain_compatibility(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required_binance_env(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_MODELS_MODE", "manual")
+    monkeypatch.delenv("OPENROUTER_MODELS_REGISTRY", raising=False)
     monkeypatch.delenv("OPENROUTER_MODELS", raising=False)
     monkeypatch.setenv("MODEL_NAME", "legacy/first:free")
     monkeypatch.setenv("MODEL_FALLBACK", "legacy/second:free")
@@ -74,6 +80,8 @@ def test_load_env_settings_rejects_empty_openrouter_model_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_required_binance_env(monkeypatch)
+    monkeypatch.setenv("OPENROUTER_MODELS_MODE", "manual")
+    monkeypatch.delenv("OPENROUTER_MODELS_REGISTRY", raising=False)
     monkeypatch.setenv("OPENROUTER_MODELS", " , \n ; ")
 
     with pytest.raises(ConfigError, match="OPENROUTER_MODELS"):

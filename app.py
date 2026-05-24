@@ -30,6 +30,7 @@ from portfolio import (
     compute_current_weights,
     decide_rebalance,
     filter_dust_positions,
+    rebalance_has_tradable_orders,
     validate_target_map,
 )
 from openrouter_model_curator import refresh_openrouter_models
@@ -461,6 +462,31 @@ def run_rebalance(args: argparse.Namespace) -> int:
             logger.info("No rebalance required. Portfolio within drift limits.")
             return 0
 
+        pendings: list[str] = []
+        tradability_rejections: list[str] = []
+        if not rebalance_has_tradable_orders(
+            snapshot=snapshot,
+            decision=decision,
+            prices=asset_prices,
+            filters=exchange_filters,
+            min_notional=args.min_notional,
+            rejections=tradability_rejections,
+        ):
+            if tradability_rejections:
+                pendings.extend(tradability_rejections)
+            auditor.log_step(
+                name="rebalance_check",
+                status="info",
+                detail="No tradable orders after filters",
+            )
+            if pendings:
+                _log_pendings(auditor, pendings)
+            auditor.finalize_run("skipped")
+            logger.info(
+                "No tradable orders after applying filters and notional limits."
+            )
+            return 0
+
         rejections: list[str] = []
         trades = build_trades(
             snapshot=snapshot,
@@ -471,7 +497,6 @@ def run_rebalance(args: argparse.Namespace) -> int:
             max_slippage=args.max_slippage,
             rejections=rejections,
         )
-        pendings: list[str] = []
         if rejections:
             pendings.extend(rejections)
         auditor.log_step(

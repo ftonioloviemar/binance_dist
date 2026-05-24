@@ -339,6 +339,55 @@ def decide_rebalance(
     return RebalanceDecision(rebalance_needed=rebalance, deltas=deltas)
 
 
+def rebalance_has_tradable_orders(
+    *,
+    snapshot: PortfolioSnapshot,
+    decision: RebalanceDecision,
+    prices: Mapping[str, float],
+    filters: Mapping[str, SymbolFilters],
+    min_notional: float,
+    rejections: list[str] | None = None,
+) -> bool:
+    reject_log = rejections if rejections is not None else []
+    quote = snapshot.quote_asset
+    for asset, delta_weight in decision.deltas.items():
+        if asset == quote:
+            continue
+        price = prices.get(asset)
+        if price is None or price <= 0:
+            reject_log.append(f"{asset}{quote}: missing price data")
+            continue
+        value_delta = snapshot.total_value * delta_weight
+        if abs(value_delta) < min_notional:
+            reject_log.append(f"{asset}{quote}: delta {value_delta:.4f} below min notional")
+            continue
+        quantity = abs(value_delta / price)
+        if quantity == 0:
+            continue
+        symbol = f"{asset}{quote}"
+        symbol_filters = filters.get(symbol)
+        if not symbol_filters:
+            logger.warning("Missing exchange filters for %s, skipping trade", symbol)
+            reject_log.append(f"{symbol}: exchange info unavailable")
+            continue
+        quantity = _apply_lot_step(quantity, symbol_filters.lot_step)
+        if quantity < symbol_filters.min_qty or quantity > symbol_filters.max_qty > 0:
+            reject_log.append(
+                f"{symbol}: quantity {quantity:.8f} outside lot bounds ({symbol_filters.min_qty}-{symbol_filters.max_qty})"
+            )
+            continue
+        notional = quantity * price
+        required_notional = max(min_notional, symbol_filters.min_notional)
+        if notional < required_notional:
+            reject_log.append(f"{symbol}: notional {notional:.4f} < min {required_notional}")
+            continue
+        if symbol_filters.max_notional > 0 and notional > symbol_filters.max_notional:
+            reject_log.append(f"{symbol}: notional {notional:.4f} > max {symbol_filters.max_notional}")
+            continue
+        return True
+    return False
+
+
 def build_trades(
     *,
     snapshot: PortfolioSnapshot,

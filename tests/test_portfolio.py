@@ -12,6 +12,7 @@ from portfolio import (
     build_trades,
     compute_current_weights,
     decide_rebalance,
+    rebalance_has_tradable_orders,
     validate_target_map,
     ai_refine_targets,
 )
@@ -39,6 +40,68 @@ def test_decide_rebalance_triggers_on_drift() -> None:
     decision = decide_rebalance(snapshot, {"BTC": 0.4, "ETH": 0.6}, drift_threshold=0.05)
     assert decision.rebalance_needed is True
     assert pytest.approx(decision.deltas["BTC"], rel=1e-3) == -0.2
+
+
+def test_rebalance_has_tradable_orders_blocks_untradable_drift() -> None:
+    snapshot = PortfolioSnapshot(
+        quote_asset="USDT",
+        total_value=100.0,
+        positions={
+            "BTC": AssetPosition(asset="BTC", quantity=0.51, price=100.0, value=51.0, weight=0.51),
+            "USDT": AssetPosition(asset="USDT", quantity=49.0, price=1.0, value=49.0, weight=0.49),
+        },
+    )
+    decision = RebalanceDecision(rebalance_needed=True, deltas={"BTC": 0.04, "USDT": -0.04})
+    filters = {
+        "BTCUSDT": SymbolFilters(
+            symbol="BTCUSDT",
+            lot_step=0.0001,
+            min_qty=0.0001,
+            max_qty=1000.0,
+            min_notional=5.0,
+            price_tick=0.01,
+        )
+    }
+    tradable = rebalance_has_tradable_orders(
+        snapshot=snapshot,
+        decision=decision,
+        prices={"BTC": 100.0},
+        filters=filters,
+        min_notional=0.0,
+    )
+
+    assert tradable is False
+
+
+def test_rebalance_has_tradable_orders_allows_tradable_delta() -> None:
+    snapshot = PortfolioSnapshot(
+        quote_asset="USDT",
+        total_value=100.0,
+        positions={
+            "BTC": AssetPosition(asset="BTC", quantity=0.7, price=100.0, value=70.0, weight=0.7),
+            "USDT": AssetPosition(asset="USDT", quantity=30.0, price=1.0, value=30.0, weight=0.3),
+        },
+    )
+    decision = RebalanceDecision(rebalance_needed=True, deltas={"BTC": 0.1, "USDT": -0.1})
+    filters = {
+        "BTCUSDT": SymbolFilters(
+            symbol="BTCUSDT",
+            lot_step=0.0001,
+            min_qty=0.0001,
+            max_qty=1000.0,
+            min_notional=5.0,
+            price_tick=0.01,
+        )
+    }
+    tradable = rebalance_has_tradable_orders(
+        snapshot=snapshot,
+        decision=decision,
+        prices={"BTC": 100.0},
+        filters=filters,
+        min_notional=0.0,
+    )
+
+    assert tradable is True
 
 
 def test_build_trades_respects_lot_step() -> None:
