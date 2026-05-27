@@ -82,6 +82,35 @@ class LowNotionalClient(FakeClient):
         }
 
 
+class LotFloorClient(FakeClient):
+    def get_account_balances(self) -> list[Balance]:
+        return [
+            Balance(asset="BTC", free=0.45, locked=0.0),
+            Balance(asset="USDT", free=55.0, locked=0.0),
+        ]
+
+    def get_symbol_price(self, symbol: str) -> float:
+        return {"BTCUSDT": 100.0}.get(symbol, 1.0)
+
+    def get_prices(self, symbols=None):
+        prices = {"BTCUSDT": 100.0}
+        if symbols:
+            return {symbol: prices[symbol] for symbol in symbols if symbol in prices}
+        return prices
+
+    def get_exchange_info(self):
+        return {
+            "BTCUSDT": SymbolFilters(
+                symbol="BTCUSDT",
+                lot_step=0.1,
+                min_qty=0.1,
+                max_qty=1000.0,
+                min_notional=5.0,
+                price_tick=0.01,
+            )
+        }
+
+
 def test_rebalance_audits_adaptive_strategy_after_run_start(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -429,7 +458,72 @@ def test_rebalance_skips_when_drift_is_not_tradable(
 
     assert detail is not None
     assert detail["run"]["status"] == "skipped"
-    rebalance_step = next(
-        step for step in detail["steps"] if step["name"] == "rebalance_check"
+    trade_floor_step = next(
+        step for step in detail["steps"] if step["name"] == "trade_floor"
     )
-    assert "tradable" in rebalance_step["detail"].lower()
+    assert "tradable" in trade_floor_step["detail"].lower()
+
+
+def test_rebalance_logs_trade_floor_when_drift_is_below_executable_floor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(app, "BinanceClient", LotFloorClient)
+    monkeypatch.setattr(
+        app,
+        "load_env_settings",
+        lambda recv_window: EnvSettings(
+            api_key="key",
+            api_secret="secret",
+            testnet=False,
+            base_url="https://api.binance.com",
+            recv_window=recv_window,
+            openrouter_api_key="openrouter-key",
+            openrouter_models=("working/model:free",),
+        ),
+    )
+    monkeypatch.setattr(
+        app,
+        "fetch_macro_snapshot",
+        lambda: MacroSnapshot(
+            data={
+                "fear_greed": {"value": 50, "classification": "Neutral"},
+                "btc_24h": {"price_change_percent": 0.0},
+                "crypto_global": {"market_cap_change_24h": 0.0},
+            },
+            errors=[],
+        ),
+    )
+    monkeypatch.setattr(
+        app,
+        "ai_refine_targets",
+        lambda **kwargs: AIAdvice(
+            targets={"BTC": 0.51, "USDT": 0.49},
+            action="redistribute",
+            rationale="test redistribute",
+        ),
+    )
+
+    args = argparse.Namespace(
+        command="rebalance",
+        dry_run=True,
+        profile="moderate",
+        drift=0.01,
+        max_slippage=0.003,
+        min_notional=0.0,
+        targets=None,
+        quote="USDT",
+        recv_window=5000,
+        config_path=Path("missing.toml"),
+        adaptive=False,
+    )
+
+    assert app.run_rebalance(args) == 0
+    [run] = app.load_recent_runs(limit=1, logs_dir=tmp_path / "logs")
+    detail = load_run_detail(run["run_id"], logs_dir=tmp_path / "logs")
+
+    assert detail is not None
+    assert detail["run"]["status"] == "skipped"
+    floor_step = next(step for step in detail["steps"] if step["name"] == "trade_floor")
+    assert "floors:" in floor_step["detail"]
+    assert "BTC>=10.0000" in floor_step["detail"]

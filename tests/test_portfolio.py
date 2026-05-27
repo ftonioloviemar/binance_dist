@@ -12,6 +12,7 @@ from portfolio import (
     build_trades,
     compute_current_weights,
     decide_rebalance,
+    estimate_executable_trade_floor,
     rebalance_has_tradable_orders,
     validate_target_map,
     ai_refine_targets,
@@ -102,6 +103,28 @@ def test_rebalance_has_tradable_orders_allows_tradable_delta() -> None:
     )
 
     assert tradable is True
+
+
+def test_estimate_executable_trade_floor_rounds_up_to_lot_step() -> None:
+    filters = SymbolFilters(
+        symbol="ADAUSDT",
+        lot_step=0.1,
+        min_qty=0.1,
+        max_qty=100000.0,
+        min_notional=5.0,
+        price_tick=0.0001,
+    )
+
+    floor = estimate_executable_trade_floor(
+        total_value=100.0,
+        price=100.0,
+        filters=filters,
+        min_notional=0.0,
+    )
+
+    assert pytest.approx(floor.quantity, rel=1e-6) == 0.1
+    assert pytest.approx(floor.notional, rel=1e-6) == 10.0
+    assert pytest.approx(floor.weight, rel=1e-6) == 0.1
 
 
 def test_build_trades_respects_lot_step() -> None:

@@ -61,6 +61,13 @@ class TradeInstruction:
 
 
 @dataclass(slots=True)
+class ExecutableTradeFloor:
+    quantity: float
+    notional: float
+    weight: float
+
+
+@dataclass(slots=True)
 class ExecutionResult:
     instruction: TradeInstruction
     status: str
@@ -339,6 +346,24 @@ def decide_rebalance(
     return RebalanceDecision(rebalance_needed=rebalance, deltas=deltas)
 
 
+def estimate_executable_trade_floor(
+    *,
+    total_value: float,
+    price: float,
+    filters: SymbolFilters,
+    min_notional: float,
+) -> ExecutableTradeFloor:
+    required_notional = max(min_notional, filters.min_notional)
+    required_quantity = required_notional / price if price > 0 else 0.0
+    required_quantity = max(required_quantity, filters.min_qty)
+    if filters.lot_step > 0:
+        steps = math.ceil(required_quantity / filters.lot_step)
+        required_quantity = max(required_quantity, steps * filters.lot_step)
+    notional = required_quantity * price
+    weight = notional / total_value if total_value > 0 else 0.0
+    return ExecutableTradeFloor(quantity=required_quantity, notional=notional, weight=weight)
+
+
 def rebalance_has_tradable_orders(
     *,
     snapshot: PortfolioSnapshot,
@@ -369,6 +394,17 @@ def rebalance_has_tradable_orders(
         if not symbol_filters:
             logger.warning("Missing exchange filters for %s, skipping trade", symbol)
             reject_log.append(f"{symbol}: exchange info unavailable")
+            continue
+        executable_floor = estimate_executable_trade_floor(
+            total_value=snapshot.total_value,
+            price=price,
+            filters=symbol_filters,
+            min_notional=min_notional,
+        )
+        if quantity < executable_floor.quantity:
+            reject_log.append(
+                f"{symbol}: delta {value_delta:.4f} below executable floor {executable_floor.notional:.4f}"
+            )
             continue
         quantity = _apply_lot_step(quantity, symbol_filters.lot_step)
         if quantity < symbol_filters.min_qty or quantity > symbol_filters.max_qty > 0:

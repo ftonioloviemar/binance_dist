@@ -6,7 +6,13 @@ import logging
 import sys
 from typing import Any, Dict, List, Mapping, Sequence
 
-from binance_client import Balance, BinanceClient, SimpleEarnPosition, SimpleEarnProduct
+from binance_client import (
+    Balance,
+    BinanceClient,
+    SimpleEarnPosition,
+    SimpleEarnProduct,
+    SymbolFilters,
+)
 from config import (
     ConfigError,
     expand_buckets,
@@ -29,6 +35,8 @@ from portfolio import (
     build_trades,
     compute_current_weights,
     decide_rebalance,
+    RebalanceDecision,
+    estimate_executable_trade_floor,
     filter_dust_positions,
     rebalance_has_tradable_orders,
     validate_target_map,
@@ -474,10 +482,20 @@ def run_rebalance(args: argparse.Namespace) -> int:
         ):
             if tradability_rejections:
                 pendings.extend(tradability_rejections)
+            floor_detail = _summarize_executable_floors(
+                snapshot=snapshot,
+                decision=decision,
+                prices=asset_prices,
+                filters=exchange_filters,
+                min_notional=args.min_notional,
+            )
             auditor.log_step(
-                name="rebalance_check",
+                name="trade_floor",
                 status="info",
-                detail="No tradable orders after filters",
+                detail=(
+                    "No tradable orders after filters"
+                    + (f"; floors: {floor_detail}" if floor_detail else "")
+                ),
             )
             if pendings:
                 _log_pendings(auditor, pendings)
@@ -910,6 +928,36 @@ def _log_pendings(auditor: AuditLogger, pendings: list[str]) -> None:
     if len(pendings) > 5:
         preview += f" (+{len(pendings) - 5} mais)"
     auditor.log_step(name="pendings", status="info", detail=preview)
+
+
+def _summarize_executable_floors(
+    *,
+    snapshot: PortfolioSnapshot,
+    decision: RebalanceDecision,
+    prices: Mapping[str, float],
+    filters: Mapping[str, SymbolFilters],
+    min_notional: float,
+) -> str:
+    quote = snapshot.quote_asset
+    summaries: list[str] = []
+    for asset, delta_weight in decision.deltas.items():
+        if asset == quote:
+            continue
+        price = prices.get(asset)
+        symbol = f"{asset}{quote}"
+        symbol_filters = filters.get(symbol)
+        if price is None or price <= 0 or symbol_filters is None:
+            continue
+        executable_floor = estimate_executable_trade_floor(
+            total_value=snapshot.total_value,
+            price=price,
+            filters=symbol_filters,
+            min_notional=min_notional,
+        )
+        summaries.append(
+            f"{asset}>={executable_floor.notional:.4f} ({executable_floor.weight:.2%})"
+        )
+    return ", ".join(summaries[:5])
     logger.info("Pendencias/itens ignorados: %s", preview)
 
 
