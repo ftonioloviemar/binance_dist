@@ -27,10 +27,11 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 - Latest implementation: `TASK-013` added a tradability-aware drift guard so untradable drift now skips instead of producing avoidable `noop`.
 - Latest implementation: `TASK-014` added minimum executable delta floor estimation and floor-aware skip logging.
-- Latest verification: `uv run pytest` -> 36 passed.
+- Latest implementation: `TASK-015` prevents AI `maintain` from vetoing actionable drift.
+- Latest verification: `uv run pytest` -> 38 passed.
 - OpenRouter model fallback and event-driven auto-curation are implemented and documented.
 - Current active card: none.
-- Latest completed card: `TASK-014` minimum executable delta floor.
+- Latest completed card: `TASK-015` override AI maintain on actionable drift.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up

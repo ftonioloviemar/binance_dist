@@ -412,10 +412,6 @@ def run_rebalance(args: argparse.Namespace) -> int:
         auditor.log_step(
             name="ai_directive", status="info", detail=f"Action={advice.action}"
         )
-        if advice.action == "maintain":
-            auditor.finalize_run("skipped")
-            logger.info("AI recommended maintaining allocations; stopping run.")
-            return 0
 
         if not (balances or earn_balances):
             auditor.log_step(
@@ -469,6 +465,12 @@ def run_rebalance(args: argparse.Namespace) -> int:
             auditor.finalize_run("skipped")
             logger.info("No rebalance required. Portfolio within drift limits.")
             return 0
+        if advice.action == "maintain":
+            auditor.log_step(
+                name="ai_directive_override",
+                status="info",
+                detail="AI maintain overridden by actionable drift",
+            )
 
         pendings: list[str] = []
         tradability_rejections: list[str] = []
