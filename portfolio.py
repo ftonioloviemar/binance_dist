@@ -371,6 +371,7 @@ def rebalance_has_tradable_orders(
     prices: Mapping[str, float],
     filters: Mapping[str, SymbolFilters],
     min_notional: float,
+    min_notional_uplift_tolerance: float = 0.0,
     rejections: list[str] | None = None,
 ) -> bool:
     reject_log = rejections if rejections is not None else []
@@ -383,11 +384,7 @@ def rebalance_has_tradable_orders(
             reject_log.append(f"{asset}{quote}: missing price data")
             continue
         value_delta = snapshot.total_value * delta_weight
-        if abs(value_delta) < min_notional:
-            reject_log.append(f"{asset}{quote}: delta {value_delta:.4f} below min notional")
-            continue
-        quantity = abs(value_delta / price)
-        if quantity == 0:
+        if value_delta == 0:
             continue
         symbol = f"{asset}{quote}"
         symbol_filters = filters.get(symbol)
@@ -401,11 +398,29 @@ def rebalance_has_tradable_orders(
             filters=symbol_filters,
             min_notional=min_notional,
         )
-        if quantity < executable_floor.quantity:
-            reject_log.append(
-                f"{symbol}: delta {value_delta:.4f} below executable floor {executable_floor.notional:.4f}"
-            )
+        quantity = _quantity_with_min_notional_uplift(
+            value_delta=value_delta,
+            price=price,
+            executable_floor=executable_floor,
+            tolerance=min_notional_uplift_tolerance,
+        )
+        if quantity is None:
+            if min_notional_uplift_tolerance > 0:
+                reject_log.append(
+                    f"{symbol}: notional {abs(value_delta):.4f} below uplift floor {executable_floor.notional:.4f}"
+                )
+            else:
+                reject_log.append(
+                    f"{symbol}: delta {value_delta:.4f} below executable floor {executable_floor.notional:.4f}"
+                )
             continue
+        if value_delta < 0:
+            available_quantity = snapshot.positions.get(asset).quantity if asset in snapshot.positions else 0.0
+            if quantity > available_quantity:
+                reject_log.append(
+                    f"{symbol}: quantity {quantity:.8f} exceeds available {available_quantity:.8f}"
+                )
+                continue
         quantity = _apply_lot_step(quantity, symbol_filters.lot_step)
         if quantity < symbol_filters.min_qty or quantity > symbol_filters.max_qty > 0:
             reject_log.append(
@@ -432,6 +447,7 @@ def build_trades(
     filters: Mapping[str, SymbolFilters],
     min_notional: float,
     max_slippage: float,
+    min_notional_uplift_tolerance: float = 0.0,
     rejections: list[str] | None = None,
 ) -> list[TradeInstruction]:
     instructions: list[TradeInstruction] = []
@@ -445,20 +461,45 @@ def build_trades(
             reject_log.append(f"{asset}{quote}: missing price data")
             continue
         value_delta = snapshot.total_value * delta_weight
-        if abs(value_delta) < min_notional:
-            reject_log.append(f"{asset}{quote}: delta {value_delta:.4f} below min notional")
+        if value_delta == 0:
             continue
-        quantity = value_delta / price
-        if quantity == 0:
-            continue
-        side = "BUY" if quantity > 0 else "SELL"
-        quantity = abs(quantity)
+        side = "BUY" if value_delta > 0 else "SELL"
         symbol = f"{asset}{quote}"
         symbol_filters = filters.get(symbol)
         if not symbol_filters:
             logger.warning("Missing exchange filters for %s, skipping trade", symbol)
             reject_log.append(f"{symbol}: exchange info unavailable")
             continue
+        executable_floor = estimate_executable_trade_floor(
+            total_value=snapshot.total_value,
+            price=price,
+            filters=symbol_filters,
+            min_notional=min_notional,
+        )
+        quantity = _quantity_with_min_notional_uplift(
+            value_delta=value_delta,
+            price=price,
+            executable_floor=executable_floor,
+            tolerance=min_notional_uplift_tolerance,
+        )
+        if quantity is None:
+            if min_notional_uplift_tolerance > 0:
+                reject_log.append(
+                    f"{symbol}: notional {abs(value_delta):.4f} below uplift floor {executable_floor.notional:.4f}"
+                )
+            else:
+                required_notional = max(min_notional, symbol_filters.min_notional)
+                reject_log.append(
+                    f"{symbol}: notional {abs(value_delta):.4f} < min {required_notional}"
+                )
+            continue
+        if side == "SELL":
+            available_quantity = snapshot.positions.get(asset).quantity if asset in snapshot.positions else 0.0
+            if quantity > available_quantity:
+                reject_log.append(
+                    f"{symbol}: quantity {quantity:.8f} exceeds available {available_quantity:.8f}"
+                )
+                continue
         quantity = _apply_lot_step(quantity, symbol_filters.lot_step)
         if quantity < symbol_filters.min_qty or quantity > symbol_filters.max_qty > 0:
             reject_log.append(
@@ -493,6 +534,25 @@ def build_trades(
             )
         )
     return instructions
+
+
+def _quantity_with_min_notional_uplift(
+    *,
+    value_delta: float,
+    price: float,
+    executable_floor: ExecutableTradeFloor,
+    tolerance: float,
+) -> float | None:
+    requested_notional = abs(value_delta)
+    requested_quantity = requested_notional / price
+    if requested_quantity >= executable_floor.quantity:
+        return requested_quantity
+
+    bounded_tolerance = max(0.0, min(tolerance, 1.0))
+    uplift_threshold = executable_floor.notional * (1.0 - bounded_tolerance)
+    if bounded_tolerance > 0 and requested_notional >= uplift_threshold:
+        return executable_floor.quantity
+    return None
 
 
 def filter_dust_positions(

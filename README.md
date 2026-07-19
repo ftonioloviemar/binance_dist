@@ -43,7 +43,8 @@ uv run app.py audit --run-id <run_id_from_previous_command>
 - Secrets via env vars: `BINANCE_API_KEY`, `BINANCE_API_SECRET`, optional `OPENROUTER_API_KEY`, `OPENROUTER_MODELS`, plus `TESTNET=true|false` to switch endpoints. Grant **Spot**, **Universal Transfer**, and **Simple Earn** (Earn API) permissions to the key before running live; Binance rejeita resgates caso essa flag esteja ausente.
 - `OPENROUTER_MODELS` is an ordered best-to-worst fallback chain for AI target refinement. Separate model IDs with comma, semicolon, or newline; there is no hard model-count limit. Legacy `MODEL_NAME`, `MODEL_FALLBACK`, and `MODEL_SECOND_FALLBACK` are still accepted only when `OPENROUTER_MODELS` is absent.
 - OpenRouter model curation is event-driven. When the first active model fails, the run falls back through the configured list, then refreshes the current free-model catalog and writes a reordered registry to `state/openrouter_models.json` for future runs. Set `OPENROUTER_MODELS_MODE=manual` to ignore the registry and force the literal `OPENROUTER_MODELS` list.
-- `.env` also controls operational defaults: dry-run flag, profile, drift/slippage/min-notional thresholds, target weights per profile, guardrails, bucket definitions (`BUCKETS_JSON`), and log retention (`LOG_RETENTION_DAYS`). Adjust it instead of editing Python files.
+- `.env` also controls operational defaults: dry-run flag, profile, drift/slippage/min-notional thresholds, `DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE`, target weights per profile, guardrails, bucket definitions (`BUCKETS_JSON`), and log retention (`LOG_RETENTION_DAYS`). Adjust it instead of editing Python files.
+- `DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE=0.10` or `--min-notional-uplift-tolerance 0.10` allows candidate trades up to 10% below the executable exchange floor to round up to that floor. Keep it at `0.0` to disable this behavior.
 - `config.toml` remains available for bucket overrides (e.g. `stable`, `alt`) if you prefer TOML.
 - Keys are never logged; failures are fatal if any mandatory variable is missing.
 
@@ -73,5 +74,5 @@ Covers weight calculations, drift decisions, rounding rules, target normalizatio
 
 ## Safety Checklist
 - Use `--dry-run` first and review planned trades + audit log.
-- Keep `min-notional`, `max-slippage`, and `drift` aligned with your risk management.
+- Keep `min-notional`, `min-notional-uplift-tolerance`, `max-slippage`, and `drift` aligned with your risk management.
 - Re-sync `config.toml` buckets whenever listing of tradable assets changes.

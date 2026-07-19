@@ -79,6 +79,7 @@ class CliDefaults:
     drift: float
     max_slippage: float
     min_notional: float
+    min_notional_uplift_tolerance: float
     quote: str
 
 
@@ -154,6 +155,9 @@ def load_cli_defaults() -> CliDefaults:
         drift=float(os.getenv("DEFAULT_DRIFT", "0.10")),
         max_slippage=float(os.getenv("DEFAULT_MAX_SLIPPAGE", "0.003")),
         min_notional=float(os.getenv("DEFAULT_MIN_NOTIONAL", "10")),
+        min_notional_uplift_tolerance=float(
+            os.getenv("DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE", "0.0")
+        ),
         quote=os.getenv("DEFAULT_QUOTE", "USDT").upper(),
     )
 

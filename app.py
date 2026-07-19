@@ -85,6 +85,12 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help="Minimum notional per order",
     )
     rebalance_parser.add_argument(
+        "--min-notional-uplift-tolerance",
+        type=float,
+        default=defaults.min_notional_uplift_tolerance,
+        help="Fraction below the executable notional floor that may be uplifted to the floor",
+    )
+    rebalance_parser.add_argument(
         "--quote", default=defaults.quote, help="Quote asset to trade against"
     )
     rebalance_parser.add_argument(
@@ -154,6 +160,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
         "drift": args.drift,
         "max_slippage": args.max_slippage,
         "min_notional": args.min_notional,
+        "min_notional_uplift_tolerance": getattr(
+            args, "min_notional_uplift_tolerance", 0.0
+        ),
     }
     initial_config_snapshot["simple_earn"] = {
         "enabled": env_settings.simple_earn_enabled,
@@ -480,6 +489,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
             prices=asset_prices,
             filters=exchange_filters,
             min_notional=args.min_notional,
+            min_notional_uplift_tolerance=getattr(
+                args, "min_notional_uplift_tolerance", 0.0
+            ),
             rejections=tradability_rejections,
         ):
             if tradability_rejections:
@@ -515,6 +527,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
             filters=exchange_filters,
             min_notional=args.min_notional,
             max_slippage=args.max_slippage,
+            min_notional_uplift_tolerance=getattr(
+                args, "min_notional_uplift_tolerance", 0.0
+            ),
             rejections=rejections,
         )
         if rejections:

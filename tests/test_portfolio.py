@@ -198,6 +198,113 @@ def test_build_trades_skips_below_effective_exchange_notional() -> None:
     assert rejections == ["ADAUSDT: notional 4.0000 < min 5.0"]
 
 
+def test_build_trades_uplifts_near_floor_notional_within_tolerance() -> None:
+    snapshot = PortfolioSnapshot(
+        quote_asset="USDT",
+        total_value=1000.0,
+        positions={
+            "ADA": AssetPosition(asset="ADA", quantity=100.0, price=1.0, value=100.0, weight=0.1),
+            "USDT": AssetPosition(asset="USDT", quantity=900.0, price=1.0, value=900.0, weight=0.9),
+        },
+    )
+    decision = RebalanceDecision(rebalance_needed=True, deltas={"ADA": 0.0045})
+    filters = {
+        "ADAUSDT": SymbolFilters(
+            symbol="ADAUSDT",
+            lot_step=0.1,
+            min_qty=0.1,
+            max_qty=100000.0,
+            min_notional=5.0,
+            price_tick=0.0001,
+        )
+    }
+    rejections: list[str] = []
+
+    trades = build_trades(
+        snapshot=snapshot,
+        decision=decision,
+        prices={"ADA": 1.0},
+        filters=filters,
+        min_notional=0.0,
+        max_slippage=0.003,
+        min_notional_uplift_tolerance=0.10,
+        rejections=rejections,
+    )
+
+    assert rejections == []
+    assert len(trades) == 1
+    assert trades[0].quantity == 5.0
+    assert trades[0].notional == 5.0
+
+
+def test_build_trades_rejects_near_floor_notional_outside_tolerance() -> None:
+    snapshot = PortfolioSnapshot(
+        quote_asset="USDT",
+        total_value=1000.0,
+        positions={
+            "ADA": AssetPosition(asset="ADA", quantity=100.0, price=1.0, value=100.0, weight=0.1),
+            "USDT": AssetPosition(asset="USDT", quantity=900.0, price=1.0, value=900.0, weight=0.9),
+        },
+    )
+    decision = RebalanceDecision(rebalance_needed=True, deltas={"ADA": 0.0044})
+    filters = {
+        "ADAUSDT": SymbolFilters(
+            symbol="ADAUSDT",
+            lot_step=0.1,
+            min_qty=0.1,
+            max_qty=100000.0,
+            min_notional=5.0,
+            price_tick=0.0001,
+        )
+    }
+    rejections: list[str] = []
+
+    trades = build_trades(
+        snapshot=snapshot,
+        decision=decision,
+        prices={"ADA": 1.0},
+        filters=filters,
+        min_notional=0.0,
+        max_slippage=0.003,
+        min_notional_uplift_tolerance=0.10,
+        rejections=rejections,
+    )
+
+    assert trades == []
+    assert rejections == ["ADAUSDT: notional 4.4000 below uplift floor 5.0000"]
+
+
+def test_rebalance_has_tradable_orders_allows_near_floor_uplift() -> None:
+    snapshot = PortfolioSnapshot(
+        quote_asset="USDT",
+        total_value=1000.0,
+        positions={
+            "ADA": AssetPosition(asset="ADA", quantity=100.0, price=1.0, value=100.0, weight=0.1),
+            "USDT": AssetPosition(asset="USDT", quantity=900.0, price=1.0, value=900.0, weight=0.9),
+        },
+    )
+    decision = RebalanceDecision(rebalance_needed=True, deltas={"ADA": 0.0045})
+    filters = {
+        "ADAUSDT": SymbolFilters(
+            symbol="ADAUSDT",
+            lot_step=0.1,
+            min_qty=0.1,
+            max_qty=100000.0,
+            min_notional=5.0,
+            price_tick=0.0001,
+        )
+    }
+
+    assert rebalance_has_tradable_orders(
+        snapshot=snapshot,
+        decision=decision,
+        prices={"ADA": 1.0},
+        filters=filters,
+        min_notional=0.0,
+        min_notional_uplift_tolerance=0.10,
+    )
+
+
 def test_build_trades_skips_above_exchange_max_notional() -> None:
     snapshot = PortfolioSnapshot(
         quote_asset="USDT",
