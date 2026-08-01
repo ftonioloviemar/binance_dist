@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import app
@@ -167,6 +168,14 @@ class MaintainOverrideClient(FakeClient):
                 price_tick=0.01,
             )
         }
+
+
+class SmallOppositeTradeClient(MaintainOverrideClient):
+    def get_account_balances(self) -> list[Balance]:
+        return [
+            Balance(asset="BTC", free=5.15, locked=0.0),
+            Balance(asset="USDT", free=485.0, locked=0.0),
+        ]
 
 
 def test_rebalance_audits_adaptive_strategy_after_run_start(
@@ -710,3 +719,89 @@ def test_rebalance_maintain_does_not_suppress_actionable_drift(
     assert detail is not None
     assert detail["run"]["status"] == "completed"
     assert any(step["name"] == "rebalance_check" for step in detail["steps"])
+
+
+def test_rebalance_blocks_opposite_side_trade_inside_anti_churn_cooldown(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    prior_time = datetime.now().astimezone() - timedelta(hours=1)
+    (logs_dir / "20260801.log").write_text(
+        "\n".join(
+            [
+                f"{prior_time.isoformat()} | run_start | run_id=prior | status=started | profile=moderate | dry_run=false",
+                f"{prior_time.isoformat()} | order | run_id=prior | status=FILLED | symbol=BTCUSDT | side=BUY | quantity=0.1 | price=100.0 | detail=prior",
+                f"{prior_time.isoformat()} | run_end | run_id=prior | status=completed",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(app, "BinanceClient", SmallOppositeTradeClient)
+    monkeypatch.setattr(
+        app,
+        "load_env_settings",
+        lambda recv_window: EnvSettings(
+            api_key="key",
+            api_secret="secret",
+            testnet=False,
+            base_url="https://api.binance.com",
+            recv_window=recv_window,
+            openrouter_api_key="openrouter-key",
+            openrouter_models=("working/model:free",),
+        ),
+    )
+    monkeypatch.setattr(
+        app,
+        "fetch_macro_snapshot",
+        lambda: MacroSnapshot(
+            data={
+                "fear_greed": {"value": 50, "classification": "Neutral"},
+                "btc_24h": {"price_change_percent": 0.0},
+                "crypto_global": {"market_cap_change_24h": 0.0},
+            },
+            errors=[],
+        ),
+    )
+    monkeypatch.setattr(
+        app,
+        "ai_refine_targets",
+        lambda **kwargs: AIAdvice(
+            targets={"BTC": 0.5, "USDT": 0.5},
+            action="redistribute",
+            rationale="test redistribute",
+        ),
+    )
+
+    def fail_execute_trades(**_: object) -> None:
+        raise AssertionError("execute_trades should not run when anti-churn blocks all trades")
+
+    monkeypatch.setattr(app, "execute_trades", fail_execute_trades)
+
+    args = argparse.Namespace(
+        command="rebalance",
+        dry_run=True,
+        profile="moderate",
+        drift=0.01,
+        max_slippage=0.003,
+        min_notional=0.0,
+        min_notional_uplift_tolerance=0.0,
+        anti_churn_cooldown_hours=12.0,
+        anti_churn_override_multiplier=2.0,
+        targets=None,
+        quote="USDT",
+        recv_window=5000,
+        config_path=Path("missing.toml"),
+        adaptive=False,
+    )
+
+    assert app.run_rebalance(args) == 0
+    [run] = app.load_recent_runs(limit=1, logs_dir=logs_dir)
+    detail = load_run_detail(run["run_id"], logs_dir=logs_dir)
+
+    assert detail is not None
+    assert detail["run"]["status"] == "skipped"
+    anti_churn_step = next(step for step in detail["steps"] if step["name"] == "anti_churn")
+    assert anti_churn_step["detail"] == "Blocked 1 opposite-side trade(s)"

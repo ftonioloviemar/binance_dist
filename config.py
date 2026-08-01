@@ -80,6 +80,8 @@ class CliDefaults:
     max_slippage: float
     min_notional: float
     min_notional_uplift_tolerance: float
+    anti_churn_cooldown_hours: float
+    anti_churn_override_multiplier: float
     quote: str
 
 
@@ -157,6 +159,12 @@ def load_cli_defaults() -> CliDefaults:
         min_notional=float(os.getenv("DEFAULT_MIN_NOTIONAL", "10")),
         min_notional_uplift_tolerance=float(
             os.getenv("DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE", "0.0")
+        ),
+        anti_churn_cooldown_hours=float(
+            os.getenv("DEFAULT_ANTI_CHURN_COOLDOWN_HOURS", "12.0")
+        ),
+        anti_churn_override_multiplier=float(
+            os.getenv("DEFAULT_ANTI_CHURN_OVERRIDE_MULTIPLIER", "2.0")
         ),
         quote=os.getenv("DEFAULT_QUOTE", "USDT").upper(),
     )

@@ -4,8 +4,10 @@ import argparse
 import json
 import logging
 import sys
+from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
+from anti_churn import filter_anti_churn_trades
 from binance_client import (
     Balance,
     BinanceClient,
@@ -91,6 +93,18 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help="Fraction below the executable notional floor that may be uplifted to the floor",
     )
     rebalance_parser.add_argument(
+        "--anti-churn-cooldown-hours",
+        type=float,
+        default=defaults.anti_churn_cooldown_hours,
+        help="Block opposite-side trades on the same symbol within this cooldown window",
+    )
+    rebalance_parser.add_argument(
+        "--anti-churn-override-multiplier",
+        type=float,
+        default=defaults.anti_churn_override_multiplier,
+        help="Allow cooldown override when drift exceeds this multiple of the active drift threshold",
+    )
+    rebalance_parser.add_argument(
         "--quote", default=defaults.quote, help="Quote asset to trade against"
     )
     rebalance_parser.add_argument(
@@ -162,6 +176,10 @@ def run_rebalance(args: argparse.Namespace) -> int:
         "min_notional": args.min_notional,
         "min_notional_uplift_tolerance": getattr(
             args, "min_notional_uplift_tolerance", 0.0
+        ),
+        "anti_churn_cooldown_hours": getattr(args, "anti_churn_cooldown_hours", 0.0),
+        "anti_churn_override_multiplier": getattr(
+            args, "anti_churn_override_multiplier", 2.0
         ),
     }
     initial_config_snapshot["simple_earn"] = {
@@ -548,6 +566,30 @@ def run_rebalance(args: argparse.Namespace) -> int:
             logger.info(
                 "No eligible trades after applying filters and notional limits."
             )
+            return 0
+
+        anti_churn_blocks: list[str] = []
+        trades = filter_anti_churn_trades(
+            trades=trades,
+            decision=decision,
+            drift_threshold=args.drift,
+            logs_dir=Path("logs"),
+            cooldown_hours=getattr(args, "anti_churn_cooldown_hours", 0.0),
+            override_multiplier=getattr(args, "anti_churn_override_multiplier", 2.0),
+            blocked=anti_churn_blocks,
+        )
+        if anti_churn_blocks:
+            pendings.extend(anti_churn_blocks)
+            auditor.log_step(
+                name="anti_churn",
+                status="info",
+                detail=f"Blocked {len(anti_churn_blocks)} opposite-side trade(s)",
+            )
+        if not trades:
+            if pendings:
+                _log_pendings(auditor, pendings)
+            auditor.finalize_run("skipped")
+            logger.info("All planned trades blocked by anti-churn cooldown.")
             return 0
 
         execution_balances: Sequence[Balance] = balances

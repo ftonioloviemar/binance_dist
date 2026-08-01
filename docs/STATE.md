@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-07-19.
+Last updated: 2026-08-01.
 
 ## Purpose
 
@@ -28,10 +28,11 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest implementation: `TASK-013` added a tradability-aware drift guard so untradable drift now skips instead of producing avoidable `noop`.
 - Latest implementation: `TASK-014` added minimum executable delta floor estimation and floor-aware skip logging.
 - Latest implementation: `TASK-016` adds configurable min-notional uplift tolerance for near-floor trade sizing.
-- Latest verification: `uv run pytest` -> 41 passed.
+- Latest implementation: `TASK-017` adds a configurable anti-churn cooldown for same-symbol opposite-side trades inside 12h unless drift exceeds 2x threshold.
+- Latest verification: `uv run pytest tests/test_anti_churn.py tests/test_app_adaptive.py -q` -> 12 passed.
 - OpenRouter model fallback and event-driven auto-curation are implemented and documented.
 - Current active card: none.
-- Latest completed card: `TASK-016` min-notional uplift tolerance.
+- Latest completed card: `TASK-017` anti-churn cooldown.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up
