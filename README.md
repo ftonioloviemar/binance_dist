@@ -60,7 +60,8 @@ uv run app.py audit --run-id <run_id_from_previous_command>
 Each run appends JSON lines to `logs/YYYYMMDD.log` (one file per day, rotated by retention window):
 - `uv run app.py audit --limit 5` for a quick summary taken from the latest logs.
 - `uv run app.py audit --run-id <id>` for detailed steps/orders reconstructed from the log file.
-Both dry-run and live executions follow the same audit trail for parity.
+- Live Spot orders request a full Binance response and include returned fill commissions in the order detail when Binance provides `fills` data, for example `commission=0.00003000 BNB`.
+Both dry-run and live executions follow the same audit trail for parity, but dry-run cannot know real exchange fees.
 
 ## Workflow
 Project workflow is tracked in `workflow/kanban/`; agent and skill rules live in `AGENTS.md`, `docs/project-continuity.md`, and `SKILLS.md`.

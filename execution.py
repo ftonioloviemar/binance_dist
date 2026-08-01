@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
 import time
-from typing import Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Mapping
 
 import requests
 
@@ -94,7 +95,7 @@ def execute_trades(
                 quantity=trade.quantity,
                 price=trade.limit_price or trade.price,
                 status=report.status,
-                detail=str(response.get("clientOrderId", client_order_id)),
+                detail=_format_order_detail(response, client_order_id),
             )
 
         if trade.side == "SELL":
@@ -112,6 +113,38 @@ def execute_trades(
         reports.append(report)
 
     return reports
+
+
+def _format_order_detail(response: Mapping[str, Any], fallback_client_order_id: str) -> str:
+    client_order_id = str(response.get("clientOrderId", fallback_client_order_id))
+    commissions = _summarize_commissions(response)
+    if not commissions:
+        return client_order_id
+    return f"clientOrderId={client_order_id}; commission={commissions}"
+
+
+def _summarize_commissions(response: Mapping[str, Any]) -> str:
+    fills = response.get("fills")
+    if not isinstance(fills, list):
+        return ""
+
+    totals: dict[str, Decimal] = {}
+    for fill in fills:
+        if not isinstance(fill, Mapping):
+            continue
+        asset = str(fill.get("commissionAsset", "")).upper()
+        raw_commission = fill.get("commission")
+        if not asset or raw_commission in {None, ""}:
+            continue
+        try:
+            commission = Decimal(str(raw_commission))
+        except InvalidOperation:
+            continue
+        totals[asset] = totals.get(asset, Decimal("0")) + commission
+
+    return ", ".join(
+        f"{format(amount, 'f')} {asset}" for asset, amount in sorted(totals.items())
+    )
 
 
 __all__ = ["execute_trades"]

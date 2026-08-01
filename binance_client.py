@@ -202,6 +202,7 @@ class BinanceClient:
         price: float | None = None,
         client_order_id: str | None = None,
         time_in_force: str = "GTC",
+        response_type: str = "FULL",
     ) -> Mapping[str, Any]:
         params: Dict[str, Any] = {
             "symbol": symbol,
@@ -210,6 +211,8 @@ class BinanceClient:
             "timestamp": self._timestamp_ms(),
             "recvWindow": self.recv_window,
         }
+        if response_type:
+            params["newOrderRespType"] = response_type
         if client_order_id:
             params["newClientOrderId"] = client_order_id
 

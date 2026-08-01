@@ -54,6 +54,27 @@ def test_signed_request_includes_signature() -> None:
     assert "signature" in session.last_params
 
 
+def test_place_order_requests_full_response_by_default() -> None:
+    session = FakeSession({"status": "FILLED"})
+    client = BinanceClient(
+        api_key="key",
+        api_secret="secret",
+        base_url="https://example.com",
+        session=session,
+    )
+
+    client.place_order(
+        symbol="BTCUSDT",
+        side="BUY",
+        order_type="MARKET",
+        quantity=0.1,
+        client_order_id="cid-123",
+    )
+
+    assert session.last_params is not None
+    assert session.last_params["newOrderRespType"] == "FULL"
+
+
 def test_symbol_filters_prefers_notional_minimum_over_min_notional() -> None:
     filters = SymbolFilters.from_exchange(
         {
