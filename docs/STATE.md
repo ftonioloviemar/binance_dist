@@ -32,8 +32,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest implementation: `TASK-019` raises the local/default drift threshold to 3% to avoid planning deltas that commonly fall below Binance's executable notional floor; uplift remains capped at 10%.
 - Latest verification: `uv run pytest` -> 48 passed; dry-run audit `006fbbef3cad47f29197b2b789273c0a` completed with 4 simulated trades and one anti-churn block.
 - OpenRouter model fallback and event-driven auto-curation are implemented and documented.
-- Current active card: `TASK-019` sizing/drift/notional calibration (review).
-- Latest completed card: `TASK-018` Binance order commission logging.
+- Current active card: none.
+- Latest completed card: `TASK-019` sizing/drift/notional calibration.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up
