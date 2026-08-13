@@ -3,12 +3,23 @@ from __future__ import annotations
 import pytest
 import json
 
-from config import ConfigError, load_env_settings
+from config import ConfigError, load_cli_defaults, load_env_settings
 
 
 def _set_required_binance_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BINANCE_API_KEY", "key")
     monkeypatch.setenv("BINANCE_API_SECRET", "secret")
+
+
+def test_load_cli_defaults_uses_notional_aware_three_percent_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEFAULT_DRIFT", raising=False)
+
+    defaults = load_cli_defaults()
+
+    assert defaults.drift == 0.03
+    assert defaults.min_notional_uplift_tolerance == 0.10
 
 
 def test_load_env_settings_uses_ordered_free_openrouter_defaults(

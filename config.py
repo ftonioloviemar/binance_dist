@@ -154,7 +154,7 @@ def load_cli_defaults() -> CliDefaults:
     return CliDefaults(
         dry_run=_parse_bool(os.getenv("DEFAULT_DRY_RUN", "true")),
         profile=os.getenv("DEFAULT_PROFILE", "moderate").lower(),
-        drift=float(os.getenv("DEFAULT_DRIFT", "0.10")),
+        drift=float(os.getenv("DEFAULT_DRIFT", "0.03")),
         max_slippage=float(os.getenv("DEFAULT_MAX_SLIPPAGE", "0.003")),
         min_notional=float(os.getenv("DEFAULT_MIN_NOTIONAL", "10")),
         min_notional_uplift_tolerance=float(
