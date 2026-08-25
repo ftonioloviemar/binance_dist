@@ -9,6 +9,7 @@ Canonical sources:
 - `SKILLS.md`
 - `CONTEXT.md`
 - `docs/STATE.md`
+- `docs/lessons-learned.md`
 - `docs/project-continuity.md`
 - the active card under `workflow/kanban/`
 - docs explicitly referenced by the active card

@@ -9,6 +9,7 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 ## Current Baseline
 
 - Repository workflow source of truth: `workflow/kanban/`.
+- Durable operational lessons: `docs/lessons-learned.md`.
 - Agent entrypoints: `AGENTS.md`, `docs/project-continuity.md`, `docs/STATE.md`, `SKILLS.md`, `CONTEXT.md`, active card.
 - Thin cross-tool wrappers: `CLAUDE.md`, `.github/copilot-instructions.md`.
 - Default verification: `uv run pytest`.
