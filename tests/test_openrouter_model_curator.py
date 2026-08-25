@@ -8,6 +8,8 @@ import requests
 from openrouter_model_curator import (
     FreeModelCandidate,
     OpenRouterModelRegistry,
+    _parse_catalog,
+    _promote_json_valid_models,
     rank_free_model_candidates,
     refresh_openrouter_models,
 )
@@ -44,6 +46,42 @@ def test_rank_free_model_candidates_prioritizes_useful_json_models() -> None:
         "nvidia/nemotron-3-super-120b-a12b:free",
         "small/tiny:free",
     ]
+
+
+def test_parse_catalog_excludes_candidates_that_are_not_free() -> None:
+    candidates = _parse_catalog(
+        {
+            "data": [
+                {
+                    "id": "paid/model",
+                    "name": "Paid",
+                    "pricing": {"prompt": "0.000001", "completion": "0"},
+                    "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+                },
+                {
+                    "id": "free/model:free",
+                    "name": "Free",
+                    "pricing": {"prompt": "0", "completion": "0"},
+                    "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+                },
+            ]
+        }
+    )
+
+    assert [candidate.model_id for candidate in candidates] == ["free/model:free"]
+
+
+def test_promote_json_valid_models_excludes_untested_candidates(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "openrouter_model_curator._model_returns_valid_json",
+        lambda _api_key, model_id: model_id == "valid",
+    )
+
+    assert _promote_json_valid_models(
+        api_key="key",
+        model_ids=["invalid", "valid", "untested"],
+        max_test_models=2,
+    ) == ["valid"]
 
 
 def test_refresh_openrouter_models_quarantines_failed_primary_and_persists(

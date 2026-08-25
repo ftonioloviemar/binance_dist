@@ -27,6 +27,8 @@ The runtime does not refresh the full model list every day.
 7. Persist the reordered active list to `state/openrouter_models.json`.
 8. On the next run, the registry takes precedence unless `OPENROUTER_MODELS_MODE=manual`.
 
+Only models that pass the structured JSON probe are promoted into the refreshed active registry. If every probe fails, the existing configured chain remains the fallback rather than promoting untested catalog entries.
+
 This keeps normal runs light and only pays the model-refresh cost after a real degradation signal.
 
 ## Ordered Free List

@@ -185,9 +185,8 @@ def _promote_json_valid_models(
     max_test_models: int,
 ) -> list[str]:
     tested = list(model_ids[:max_test_models])
-    untested = list(model_ids[max_test_models:])
     valid = [model_id for model_id in tested if _model_returns_valid_json(api_key, model_id)]
-    return valid + untested if valid else list(model_ids)
+    return valid
 
 
 def _model_returns_valid_json(api_key: str, model_id: str) -> bool:
