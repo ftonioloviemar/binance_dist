@@ -46,6 +46,7 @@ uv run app.py audit --run-id <run_id_from_previous_command>
 - `.env` also controls operational defaults: dry-run flag, profile, drift/slippage/min-notional thresholds, `DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE`, target weights per profile, guardrails, bucket definitions (`BUCKETS_JSON`), and log retention (`LOG_RETENTION_DAYS`). Adjust it instead of editing Python files.
 - `DEFAULT_DRIFT=0.03` is the notional-aware default threshold: it avoids planning frequent deltas that cannot reach Binance's executable floor. `DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE=0.10` or `--min-notional-uplift-tolerance 0.10` allows candidate trades up to 10% below the executable exchange floor to round up to that floor. Keep it at `0.0` to disable this behavior.
 - CoinGecko macro data is cached at `state/macro_context_cache.json` for up to 24 hours after a successful read. If the source times out or returns `429`, the audit keeps the error and marks the reused snapshot as stale with its age.
+- Per-symbol deltas below the executable exchange floor are recorded as `trade_floor` non-actionable deltas, not as pending execution failures; near-floor uplift remains bounded by `DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE`.
 - `config.toml` remains available for bucket overrides (e.g. `stable`, `alt`) if you prefer TOML.
 - Keys are never logged; failures are fatal if any mandatory variable is missing.
 

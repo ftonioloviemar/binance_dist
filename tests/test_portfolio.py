@@ -183,6 +183,7 @@ def test_build_trades_skips_below_effective_exchange_notional() -> None:
         )
     }
     rejections: list[str] = []
+    non_actionable: list[str] = []
 
     trades = build_trades(
         snapshot=snapshot,
@@ -192,10 +193,12 @@ def test_build_trades_skips_below_effective_exchange_notional() -> None:
         min_notional=0.0,
         max_slippage=0.003,
         rejections=rejections,
+        non_actionable_rejections=non_actionable,
     )
 
     assert trades == []
-    assert rejections == ["ADAUSDT: notional 4.0000 < min 5.0"]
+    assert rejections == []
+    assert non_actionable == ["ADAUSDT: notional 4.0000 < min 5.0"]
 
 
 def test_build_trades_uplifts_near_floor_notional_within_tolerance() -> None:

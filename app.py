@@ -501,6 +501,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
 
         pendings: list[str] = []
         tradability_rejections: list[str] = []
+        non_actionable_rejections: list[str] = []
         if not rebalance_has_tradable_orders(
             snapshot=snapshot,
             decision=decision,
@@ -511,6 +512,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 args, "min_notional_uplift_tolerance", 0.0
             ),
             rejections=tradability_rejections,
+            non_actionable_rejections=non_actionable_rejections,
         ):
             if tradability_rejections:
                 pendings.extend(tradability_rejections)
@@ -526,6 +528,11 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 status="info",
                 detail=(
                     "No tradable orders after filters"
+                    + (
+                        f"; non-actionable deltas: {', '.join(non_actionable_rejections)}"
+                        if non_actionable_rejections
+                        else ""
+                    )
                     + (f"; floors: {floor_detail}" if floor_detail else "")
                 ),
             )
@@ -549,9 +556,19 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 args, "min_notional_uplift_tolerance", 0.0
             ),
             rejections=rejections,
+            non_actionable_rejections=non_actionable_rejections,
         )
         if rejections:
             pendings.extend(rejections)
+        if non_actionable_rejections:
+            auditor.log_step(
+                name="trade_floor",
+                status="info",
+                detail=(
+                    "Non-actionable deltas filtered: "
+                    + "; ".join(non_actionable_rejections)
+                ),
+            )
         auditor.log_step(
             name="rebalance_check",
             status="info",

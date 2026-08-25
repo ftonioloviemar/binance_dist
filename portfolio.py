@@ -373,6 +373,7 @@ def rebalance_has_tradable_orders(
     min_notional: float,
     min_notional_uplift_tolerance: float = 0.0,
     rejections: list[str] | None = None,
+    non_actionable_rejections: list[str] | None = None,
 ) -> bool:
     reject_log = rejections if rejections is not None else []
     quote = snapshot.quote_asset
@@ -405,12 +406,17 @@ def rebalance_has_tradable_orders(
             tolerance=min_notional_uplift_tolerance,
         )
         if quantity is None:
+            rejection_log = (
+                non_actionable_rejections
+                if non_actionable_rejections is not None
+                else reject_log
+            )
             if min_notional_uplift_tolerance > 0:
-                reject_log.append(
+                rejection_log.append(
                     f"{symbol}: notional {abs(value_delta):.4f} below uplift floor {executable_floor.notional:.4f}"
                 )
             else:
-                reject_log.append(
+                rejection_log.append(
                     f"{symbol}: delta {value_delta:.4f} below executable floor {executable_floor.notional:.4f}"
                 )
             continue
@@ -449,6 +455,7 @@ def build_trades(
     max_slippage: float,
     min_notional_uplift_tolerance: float = 0.0,
     rejections: list[str] | None = None,
+    non_actionable_rejections: list[str] | None = None,
 ) -> list[TradeInstruction]:
     instructions: list[TradeInstruction] = []
     reject_log = rejections if rejections is not None else []
@@ -483,13 +490,18 @@ def build_trades(
             tolerance=min_notional_uplift_tolerance,
         )
         if quantity is None:
+            rejection_log = (
+                non_actionable_rejections
+                if non_actionable_rejections is not None
+                else reject_log
+            )
             if min_notional_uplift_tolerance > 0:
-                reject_log.append(
+                rejection_log.append(
                     f"{symbol}: notional {abs(value_delta):.4f} below uplift floor {executable_floor.notional:.4f}"
                 )
             else:
                 required_notional = max(min_notional, symbol_filters.min_notional)
-                reject_log.append(
+                rejection_log.append(
                     f"{symbol}: notional {abs(value_delta):.4f} < min {required_notional}"
                 )
             continue
