@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-08-01.
+Last updated: 2026-08-25.
 
 ## Purpose
 
@@ -30,12 +30,15 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest implementation: `TASK-016` adds configurable min-notional uplift tolerance for near-floor trade sizing.
 - Latest implementation: `TASK-018` requests full Binance order responses and logs returned fill commissions in live order audit details.
 - Latest implementation: `TASK-019` raises the local/default drift threshold to 3% to avoid planning deltas that commonly fall below Binance's executable notional floor; uplift remains capped at 10%.
-- Latest verification: `uv run pytest` -> 48 passed; dry-run audit `006fbbef3cad47f29197b2b789273c0a` completed with 4 simulated trades and one anti-churn block.
+- Latest implementation: `TASK-020` promotes only OpenRouter free models that pass the structured JSON probe; untested catalog entries are no longer promoted.
+- Latest implementation: `TASK-021` persists a 24-hour CoinGecko cache and marks reused macro data stale with age after upstream failure.
+- Latest implementation: `TASK-022` classifies below-floor per-symbol deltas as non-actionable `trade_floor` events instead of pending execution failures.
+- Latest verification: `uv run pytest` -> 52 passed; dry-run audit `86bbed8e54ce4efcaaa9948515fd5de8` completed in DRY mode with no orders because the decision was maintain.
 - OpenRouter model fallback and event-driven auto-curation are implemented and documented.
 - Current active card: none.
-- Latest completed card: `TASK-019` sizing/drift/notional calibration.
+- Latest completed cards: `TASK-020`, `TASK-021`, and `TASK-022` operational resilience adjustments.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up
 
-- No current blocker. The dry-run `final_balances` empty-portfolio warning was addressed in `TASK-012`.
+- No current blocker. The integrated dry-run did not exercise trade-floor logging because the portfolio was within drift; unit tests cover that path. The dry-run `final_balances` empty-portfolio warning was addressed in `TASK-012`.

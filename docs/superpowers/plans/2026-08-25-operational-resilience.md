@@ -25,11 +25,11 @@
 - Test: `tests/test_openrouter_model_curator.py`
 - Card: `workflow/kanban/02_ready/TASK-020-openrouter-curation-hardening.md`
 
-- [ ] Write failing tests for excluding non-free/unsafe candidates from the active list and retaining only models that pass structured JSON validation in the tested promotion window.
-- [ ] Run focused tests and confirm the expected RED failures.
-- [ ] Implement the smallest filtering/validation change without changing fallback order semantics.
-- [ ] Run focused tests and then `uv run pytest`.
-- [ ] Record evidence, move the card to `05_done`, and commit.
+- [x] Write failing tests for excluding non-free/unsafe candidates from the active list and retaining only models that pass structured JSON validation in the tested promotion window.
+- [x] Run focused tests and confirm the expected RED failures.
+- [x] Implement the smallest filtering/validation change without changing fallback order semantics.
+- [x] Run focused tests and then `uv run pytest`.
+- [x] Record evidence, move the card to `05_done`, and commit.
 
 ### Task 2: Add CoinGecko stale-cache fallback
 
@@ -38,11 +38,11 @@
 - Test: `tests/test_macro_context.py`
 - Card: `workflow/kanban/02_ready/TASK-021-macro-context-cache-fallback.md`
 
-- [ ] Write failing tests for reusing a recent valid CoinGecko snapshot after timeout/429 and reporting stale age without hiding the error.
-- [ ] Run focused tests and confirm the expected RED failures.
-- [ ] Implement a bounded in-process cache with explicit stale metadata; preserve Binance and Fear & Greed behavior.
-- [ ] Run focused tests and then `uv run pytest`.
-- [ ] Record evidence, move the card to `05_done`, and commit.
+- [x] Write failing tests for reusing a recent valid CoinGecko snapshot after timeout/429 and reporting stale age without hiding the error.
+- [x] Run focused tests and confirm the expected RED failures.
+- [x] Implement a bounded persistent cache with explicit stale metadata; preserve Binance and Fear & Greed behavior.
+- [x] Run focused tests and then `uv run pytest`.
+- [x] Record evidence, move the card to `05_done`, and commit.
 
 ### Task 3: Filter below-floor per-symbol deltas
 
@@ -51,15 +51,15 @@
 - Test: `tests/test_portfolio.py`
 - Card: `workflow/kanban/02_ready/TASK-022-executable-delta-filter.md`
 
-- [ ] Write failing tests proving deltas below the executable floor are classified as non-actionable and not returned as trade instructions, while near-floor uplift remains allowed.
-- [ ] Run focused tests and confirm the expected RED failures.
-- [ ] Implement the narrow per-symbol floor check using existing exchange filters and tolerance.
-- [ ] Run focused tests and then `uv run pytest`.
-- [ ] Record evidence, move the card to `05_done`, and commit.
+- [x] Write failing tests proving deltas below the executable floor are classified as non-actionable and not returned as trade instructions, while near-floor uplift remains allowed.
+- [x] Run focused tests and confirm the expected RED failures.
+- [x] Implement the narrow per-symbol floor check using existing exchange filters and tolerance.
+- [x] Run focused tests and then `uv run pytest`.
+- [x] Record evidence, move the card to `05_done`, and commit.
 
 ### Task 4: Integrated dry-run and closeout
 
-- [ ] Run `uv run pytest` fresh.
-- [ ] Run one `--dry-run true` rebalance and inspect its audit record.
-- [ ] Confirm no live mutation occurred, update `docs/STATE.md`, and review `git status`.
-- [ ] Push only if explicitly requested later.
+- [x] Run `uv run pytest` fresh.
+- [x] Run one `--dry-run true` rebalance and inspect its audit record.
+- [x] Confirm no live mutation occurred, update `docs/STATE.md`, and review `git status`.
+- [x] Push only if explicitly requested later.
