@@ -453,3 +453,31 @@ def test_ai_refine_targets_records_first_model_failure_and_fallback_success(
     assert advice.model_failures[0].model == "broken/primary:free"
     assert advice.model_failures[0].status_code == 404
     assert advice.rationale == "fallback ok"
+
+
+def test_ai_refine_targets_classifies_null_model_content_as_invalid_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeResponse:
+        status_code = 200
+        headers: dict[str, str] = {}
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, object]:
+            return {"choices": [{"message": {"content": None}}]}
+
+    monkeypatch.setattr("portfolio.requests.post", lambda *_args, **_kwargs: FakeResponse())
+
+    advice = ai_refine_targets(
+        api_key="key",
+        models=("broken/null-content:free",),
+        portfolio_value=1000.0,
+        current_weights={"BTC": 0.5, "USDT": 0.5},
+        proposed_weights={"BTC": 0.4, "USDT": 0.6},
+    )
+
+    assert advice.targets == {"BTC": 0.4, "USDT": 0.6}
+    assert advice.model_used is None
+    assert advice.model_failures[0].error_type == "invalid_model_output"

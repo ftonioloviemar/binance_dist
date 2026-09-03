@@ -604,7 +604,9 @@ def filter_dust_positions(
     return filtered_snapshot, dust
 
 
-def _extract_plan_from_message(content: str) -> tuple[Dict[str, float], str | None, str | None]:
+def _extract_plan_from_message(content: object) -> tuple[Dict[str, float], str | None, str | None]:
+    if not isinstance(content, str):
+        return {}, None, None
     match = re.search(r"\{.*\}", content, re.S)
     if not match:
         return {}, None, None
