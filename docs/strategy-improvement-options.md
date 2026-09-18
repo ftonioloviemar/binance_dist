@@ -9,9 +9,9 @@ Observed behavior from recent logs:
 - AI directive returned `redistribute` in the last 30 analyzed runs.
 - The drift gate skipped 9 runs and adjusted 20.
 - Several adjusted runs still produced many Binance `NOTIONAL` rejections.
-- No recent run showed an `adaptive_strategy` audit step, so the adaptive layer is not yet producing observable practical effect.
+- The adaptive layer was absent from the scheduled production launcher. It was enabled there with explicit user approval on 2026-09-18; subsequent scheduled runs must be checked for an `adaptive_strategy` audit step and compared against their realized allocation/turnover.
 
-The first priority is execution quality: fix audit, notional planning, and adaptive observability before tuning for gains.
+The first priority remains execution quality: validate adaptive observability, notional planning, and realized costs before tuning for gains.
 
 ## Evidence From Research
 
