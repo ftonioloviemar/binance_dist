@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
+from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
 from typing import Any, Mapping
+
+from performance_store import load_portfolio_snapshots
 
 
 def compare_snapshots(
@@ -49,6 +54,99 @@ def compare_snapshots(
         "missing_assets": sorted(missing_assets),
         "profit": None,
     }
+
+
+def build_performance_report(
+    db_path: str | Path | None,
+    *,
+    days: int = 30,
+    now: str | None = None,
+) -> dict[str, Any]:
+    current = _parse_timestamp(now) if now else datetime.now(timezone.utc)
+    cutoff = current - timedelta(days=days)
+    snapshots = [
+        snapshot
+        for snapshot in load_portfolio_snapshots(db_path)
+        if _parse_timestamp(snapshot.get("timestamp")) >= cutoff
+    ]
+    pairs: dict[str, dict[str, Mapping[str, Any]]] = {}
+    for snapshot in snapshots:
+        run_id = str(snapshot.get("run_id", ""))
+        phase = str(snapshot.get("phase", ""))
+        if run_id and phase in {"before", "after"}:
+            pairs.setdefault(run_id, {})[phase] = snapshot
+
+    report = {
+        "days": days,
+        "generated_at": current.isoformat(),
+        "horizons": {
+            "24h": _build_horizon(pairs, current - timedelta(hours=24), current),
+            "7d": _build_horizon(pairs, current - timedelta(days=7), current),
+            "30d": _build_horizon(pairs, current - timedelta(days=30), current),
+        },
+    }
+    return report
+
+
+def render_performance_report(
+    report: Mapping[str, Any],
+    *,
+    json_output: bool = False,
+) -> str:
+    if json_output:
+        return json.dumps(report, sort_keys=True, indent=2)
+    lines = [f"Performance report (last {report.get('days', '?')} days)"]
+    for horizon, data in report.get("horizons", {}).items():
+        if data.get("status") != "ok":
+            lines.append(f"{horizon}: no data")
+            continue
+        lines.append(
+            f"{horizon}: observed={data['observed_change']} "
+            f"hold={data['hold_change'] or 'unknown'} "
+            f"attribution={data['attribution_status']} runs={data['runs']}"
+        )
+    return "\n".join(lines)
+
+
+def _build_horizon(
+    pairs: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    cutoff: datetime,
+    current: datetime,
+) -> dict[str, Any]:
+    eligible: list[tuple[datetime, datetime, Mapping[str, Any], Mapping[str, Any]]] = []
+    for pair in pairs.values():
+        before = pair.get("before")
+        after = pair.get("after")
+        if not before or not after:
+            continue
+        before_time = _parse_timestamp(before.get("timestamp"))
+        after_time = _parse_timestamp(after.get("timestamp"))
+        if cutoff <= before_time <= current and after_time <= current:
+            eligible.append((before_time, after_time, before, after))
+    if not eligible:
+        return {"status": "no_data", "runs": 0}
+    eligible.sort(key=lambda item: item[0])
+    first_before = eligible[0][2]
+    last_after = max(eligible, key=lambda item: item[1])[3]
+    result = compare_snapshots(first_before, last_after)
+    result.update(
+        {
+            "status": "ok",
+            "runs": len(eligible),
+            "start_timestamp": first_before.get("timestamp"),
+            "end_timestamp": last_after.get("timestamp"),
+        }
+    )
+    return result
+
+
+def _parse_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str):
+        return datetime.min.replace(tzinfo=timezone.utc)
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _decimal(value: Any) -> Decimal | None:

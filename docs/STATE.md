@@ -50,6 +50,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest verification: `TASK-027` focused tests -> 11 passed; full `uv run pytest -q` -> 63 passed.
 - `TASK-028` adds hold benchmarking, explicit missing-price handling, and external-flow records; values are not labeled profit unless future reconciliation marks flows complete.
 - Latest verification: `TASK-028` focused tests -> 3 passed; full `uv run pytest -q` -> 66 passed.
+- `TASK-029` adds `performance --days 30` with text/JSON output for 24h, 7d, and 30d; empty history reports `no_data`.
+- Latest verification: `TASK-029` focused tests -> 3 passed; full `uv run pytest -q` -> 69 passed; CLI JSON smoke passed.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up

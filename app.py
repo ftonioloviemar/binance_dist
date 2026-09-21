@@ -46,6 +46,7 @@ from portfolio import (
 )
 from openrouter_model_curator import refresh_openrouter_models
 from performance_store import build_portfolio_snapshot, record_portfolio_snapshot
+from performance import build_performance_report, render_performance_report
 
 logger = logging.getLogger("rebalance")
 
@@ -131,6 +132,16 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--limit", type=int, default=5, help="Number of recent runs to list (default 5)"
     )
 
+    performance_parser = subcommands.add_parser(
+        "performance", help="Report persisted portfolio performance snapshots"
+    )
+    performance_parser.add_argument(
+        "--days", type=int, default=30, help="Look back this many days (default 30)"
+    )
+    performance_parser.add_argument(
+        "--json", action="store_true", help="Render machine-readable JSON"
+    )
+
     normalized = _normalize_argv(argv)
     args = parser.parse_args(normalized)
     return args
@@ -143,6 +154,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.command == "audit":
         return run_audit(args)
+    if args.command == "performance":
+        return run_performance(args)
     return run_rebalance(args)
 
 
@@ -761,6 +774,15 @@ def run_audit(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_performance(args: argparse.Namespace) -> int:
+    if args.days <= 0:
+        logger.error("--days must be positive")
+        return 1
+    report = build_performance_report(None, days=args.days)
+    print(render_performance_report(report, json_output=args.json))
+    return 0
+
+
 def _parse_bool(value: str) -> bool:
     truthy = {"1", "true", "yes", "on"}
     falsy = {"0", "false", "no", "off"}
@@ -1094,7 +1116,7 @@ def _print_run_detail(detail: Mapping[str, Any]) -> None:
 
 def _normalize_argv(argv: Sequence[str] | None) -> list[str]:
     tokens = list(argv or [])
-    if not tokens or tokens[0] not in {"rebalance", "audit"}:
+    if not tokens or tokens[0] not in {"rebalance", "audit", "performance"}:
         return ["rebalance", *tokens]
     return tokens
 
