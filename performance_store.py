@@ -136,6 +136,58 @@ def load_portfolio_snapshots(
     return [_decode_snapshot(dict(row)) for row in rows]
 
 
+def record_external_flow(
+    db_path: str | Path | None,
+    flow: Mapping[str, Any],
+) -> None:
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as connection:
+        _ensure_schema(connection)
+        connection.execute(
+            """
+            INSERT INTO external_flows(
+                flow_id, timestamp, asset, quote_value, direction, source, confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(flow_id) DO UPDATE SET
+                timestamp=excluded.timestamp,
+                asset=excluded.asset,
+                quote_value=excluded.quote_value,
+                direction=excluded.direction,
+                source=excluded.source,
+                confidence=excluded.confidence
+            """,
+            (
+                str(flow["flow_id"]),
+                str(flow["timestamp"]),
+                str(flow["asset"]).upper(),
+                str(flow["quote_value"]),
+                str(flow["direction"]).lower(),
+                str(flow.get("source", "unknown")),
+                str(flow.get("confidence", "unknown")),
+            ),
+        )
+
+
+def load_external_flows(
+    db_path: str | Path | None,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    if not path.exists():
+        return []
+    query = "SELECT flow_id, timestamp, asset, quote_value, direction, source, confidence FROM external_flows ORDER BY timestamp ASC"
+    parameters: list[Any] = []
+    if limit is not None:
+        query += " LIMIT ?"
+        parameters.append(limit)
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute(query, parameters).fetchall()
+    fields = ("flow_id", "timestamp", "asset", "quote_value", "direction", "source", "confidence")
+    return [dict(zip(fields, row)) for row in rows]
+
+
 def _ensure_schema(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
@@ -156,6 +208,19 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             external_flow_status TEXT NOT NULL,
             missing_prices_json TEXT NOT NULL,
             PRIMARY KEY (run_id, phase)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS external_flows (
+            flow_id TEXT PRIMARY KEY,
+            timestamp TEXT NOT NULL,
+            asset TEXT NOT NULL,
+            quote_value TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            source TEXT NOT NULL,
+            confidence TEXT NOT NULL
         )
         """
     )

@@ -48,6 +48,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest verification: `TASK-026` focused tests -> 5 passed; full `uv run pytest -q` -> 61 passed.
 - `TASK-027` integrates before/after Spot+Earn snapshots and fee-reference lookup into the rebalance flow; persistence remains best-effort and no cost gate is active.
 - Latest verification: `TASK-027` focused tests -> 11 passed; full `uv run pytest -q` -> 63 passed.
+- `TASK-028` adds hold benchmarking, explicit missing-price handling, and external-flow records; values are not labeled profit unless future reconciliation marks flows complete.
+- Latest verification: `TASK-028` focused tests -> 3 passed; full `uv run pytest -q` -> 66 passed.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up
