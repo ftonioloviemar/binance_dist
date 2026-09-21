@@ -39,12 +39,19 @@ uv run app.py audit --limit 10
 uv run app.py audit --run-id <run_id_from_previous_command>
 ```
 
+Financial performance report (read-only):
+```bash
+uv run app.py performance --days 30
+uv run app.py performance --days 30 --json
+```
+
 ## Configuration & Security
 - Secrets via env vars: `BINANCE_API_KEY`, `BINANCE_API_SECRET`, optional `OPENROUTER_API_KEY`, `OPENROUTER_MODELS`, plus `TESTNET=true|false` to switch endpoints. Grant **Spot**, **Universal Transfer**, and **Simple Earn** (Earn API) permissions to the key before running live; Binance rejeita resgates caso essa flag esteja ausente.
 - `OPENROUTER_MODELS` is an ordered best-to-worst fallback chain for AI target refinement. Separate model IDs with comma, semicolon, or newline; there is no hard model-count limit. Legacy `MODEL_NAME`, `MODEL_FALLBACK`, and `MODEL_SECOND_FALLBACK` are still accepted only when `OPENROUTER_MODELS` is absent.
 - OpenRouter model curation is event-driven. When the first active model fails, the run falls back through the configured list, then refreshes the current free-model catalog and writes a reordered registry to `state/openrouter_models.json` for future runs. Set `OPENROUTER_MODELS_MODE=manual` to ignore the registry and force the literal `OPENROUTER_MODELS` list.
 - `.env` also controls operational defaults: dry-run flag, profile, drift/slippage/min-notional thresholds, `DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE`, target weights per profile, guardrails, bucket definitions (`BUCKETS_JSON`), and log retention (`LOG_RETENTION_DAYS`). Adjust it instead of editing Python files.
 - `DEFAULT_DRIFT=0.03` is the notional-aware default threshold: it avoids planning frequent deltas that cannot reach Binance's executable floor. `DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE=0.10` or `--min-notional-uplift-tolerance 0.10` allows candidate trades up to 10% below the executable exchange floor to round up to that floor. Keep it at `0.0` to disable this behavior.
+- `COST_GATE_MODE=observe` records the cost-policy decision without blocking. Keep `COST_GATE_MIN_NET_BENEFIT_BPS` unset until benefit and fee calibration are validated; `enforce` blocks only calibrated plans below that net-benefit threshold.
 - CoinGecko macro data is cached at `state/macro_context_cache.json` for up to 24 hours after a successful read. If the source times out or returns `429`, the audit keeps the error and marks the reused snapshot as stale with its age.
 - Per-symbol deltas below the executable exchange floor are recorded as `trade_floor` non-actionable deltas, not as pending execution failures; near-floor uplift remains bounded by `DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE`.
 - `config.toml` remains available for bucket overrides (e.g. `stable`, `alt`) if you prefer TOML.
@@ -63,6 +70,7 @@ Each run appends JSON lines to `logs/YYYYMMDD.log` (one file per day, rotated by
 - `uv run app.py audit --limit 5` for a quick summary taken from the latest logs.
 - `uv run app.py audit --run-id <id>` for detailed steps/orders reconstructed from the log file.
 - Live Spot orders request a full Binance response and include returned fill commissions in the order detail when Binance provides `fills` data, for example `commission=0.00003000 BNB`.
+- Live fill costs are also persisted in `state/performance.db`; use the performance report to compare observed change, hold benchmark, commissions, and attribution status.
 Both dry-run and live executions follow the same audit trail for parity, but dry-run cannot know real exchange fees.
 
 ## Workflow

@@ -56,6 +56,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest verification: `TASK-030` focused tests -> 19 passed; full `uv run pytest -q` -> 73 passed.
 - `TASK-031` persists real execution costs and aggregates gross notional, commission, bps, and unknown conversions in performance horizons; dry-run costs are not persisted.
 - Latest verification: `TASK-031` focused tests -> 1 passed; full `uv run pytest -q` -> 74 passed.
+- `TASK-032` documents performance interpretation, cost-gate configuration, attribution limits, and lessons learned; SQLite schema is version 2.
+- Latest verification: `TASK-032` full `uv run pytest -q` -> 74 passed; `git diff --check` and performance JSON smoke passed.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up

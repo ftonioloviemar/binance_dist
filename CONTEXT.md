@@ -15,6 +15,8 @@ This glossary captures domain language for the Binance portfolio rebalancer. Wor
 - **OpenRouter model registry**: Runtime-generated active model list at `state/openrouter_models.json`, created only after the first active model fails and a refresh succeeds.
 - **Simple Earn flow**: Optional consolidation step that can simulate or execute redeem/trade/subscribe operations for flexible Earn positions.
 - **Audit run**: Persistent JSON-lines record of run config, steps, orders, warnings, and final status, inspectable through `uv run app.py audit`.
+- **Effective execution cost**: Exchange-reported filled notional plus commissions converted to the quote asset only when a reference price is known; unknown conversions remain explicit.
+- **Attribution status**: Evidence state for performance interpretation: `complete`, `not_attributed` when external flows are unknown, or `incomplete` when required prices/data are missing.
 
 ## Boundary Rules
 
