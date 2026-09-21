@@ -52,6 +52,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest verification: `TASK-028` focused tests -> 3 passed; full `uv run pytest -q` -> 66 passed.
 - `TASK-029` adds `performance --days 30` with text/JSON output for 24h, 7d, and 30d; empty history reports `no_data`.
 - Latest verification: `TASK-029` focused tests -> 3 passed; full `uv run pytest -q` -> 69 passed; CLI JSON smoke passed.
+- `TASK-030` adds configurable `off/observe/enforce` cost policy and audit event before execution; default `observe`, and uncalibrated data never blocks.
+- Latest verification: `TASK-030` focused tests -> 19 passed; full `uv run pytest -q` -> 73 passed.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up

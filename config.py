@@ -83,6 +83,8 @@ class CliDefaults:
     anti_churn_cooldown_hours: float
     anti_churn_override_multiplier: float
     quote: str
+    cost_gate_mode: str
+    cost_gate_min_net_benefit_bps: float | None
 
 
 class ConfigError(RuntimeError):
@@ -167,6 +169,10 @@ def load_cli_defaults() -> CliDefaults:
             os.getenv("DEFAULT_ANTI_CHURN_OVERRIDE_MULTIPLIER", "2.0")
         ),
         quote=os.getenv("DEFAULT_QUOTE", "USDT").upper(),
+        cost_gate_mode=os.getenv("COST_GATE_MODE", "observe").lower(),
+        cost_gate_min_net_benefit_bps=_optional_float(
+            os.getenv("COST_GATE_MIN_NET_BENEFIT_BPS")
+        ),
     )
 
 
@@ -268,6 +274,15 @@ def _parse_bool(value: str) -> bool:
     if normalized in falsy:
         return False
     raise ConfigError(f"Invalid boolean value '{value}'")
+
+
+def _optional_float(value: str | None) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except ValueError as exc:
+        raise ConfigError(f"Invalid numeric value '{value}'") from exc
 
 
 def _load_openrouter_models() -> tuple[str, ...]:

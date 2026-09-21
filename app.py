@@ -47,6 +47,7 @@ from portfolio import (
 from openrouter_model_curator import refresh_openrouter_models
 from performance_store import build_portfolio_snapshot, record_portfolio_snapshot
 from performance import build_performance_report, render_performance_report
+from cost_gate import evaluate_cost_gate
 
 logger = logging.getLogger("rebalance")
 
@@ -120,6 +121,18 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--adaptive",
         action="store_true",
         help="Enable adaptive strategy based on market sentiment",
+    )
+    rebalance_parser.add_argument(
+        "--cost-gate-mode",
+        choices=["off", "observe", "enforce"],
+        default=defaults.cost_gate_mode,
+        help="Cost gate policy mode (default: observe)",
+    )
+    rebalance_parser.add_argument(
+        "--cost-gate-min-net-benefit-bps",
+        type=float,
+        default=defaults.cost_gate_min_net_benefit_bps,
+        help="Minimum calibrated net benefit in basis points before enforcement",
     )
 
     audit_parser = subcommands.add_parser(
@@ -196,6 +209,12 @@ def run_rebalance(args: argparse.Namespace) -> int:
         "anti_churn_override_multiplier": getattr(
             args, "anti_churn_override_multiplier", 2.0
         ),
+        "cost_gate": {
+            "mode": getattr(args, "cost_gate_mode", "observe"),
+            "min_net_benefit_bps": getattr(
+                args, "cost_gate_min_net_benefit_bps", None
+            ),
+        },
     }
     initial_config_snapshot["simple_earn"] = {
         "enabled": env_settings.simple_earn_enabled,
@@ -617,6 +636,38 @@ def run_rebalance(args: argparse.Namespace) -> int:
             logger.info(
                 "No eligible trades after applying filters and notional limits."
             )
+            return 0
+
+        cost_gate_decision = evaluate_cost_gate(
+            mode=getattr(args, "cost_gate_mode", "observe"),
+            expected_benefit_bps=None,
+            estimated_cost_bps=None,
+            min_net_benefit_bps=getattr(args, "cost_gate_min_net_benefit_bps", None),
+        )
+        auditor.log_step(
+            name="cost_gate",
+            status=cost_gate_decision.status,
+            detail=json.dumps(
+                {
+                    "mode": cost_gate_decision.mode,
+                    "allowed": cost_gate_decision.allowed,
+                    "expected_benefit_bps": cost_gate_decision.expected_benefit_bps,
+                    "estimated_cost_bps": cost_gate_decision.estimated_cost_bps,
+                    "net_benefit_bps": cost_gate_decision.net_benefit_bps,
+                    "reason": cost_gate_decision.reason,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+        if not cost_gate_decision.allowed:
+            if pendings:
+                _log_pendings(auditor, pendings)
+            _persist_performance_snapshot(
+                auditor, {**before_performance, "phase": "after"}
+            )
+            auditor.finalize_run("blocked_cost")
+            logger.info("Cost gate blocked planned trades.")
             return 0
 
         anti_churn_blocks: list[str] = []
