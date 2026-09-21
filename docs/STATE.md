@@ -46,6 +46,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest verification: `TASK-025` focused tests -> 3 passed; full `uv run pytest -q` -> 57 passed.
 - `TASK-026` adds fill-level effective-cost summarization and compatible audit detail fields; app integration will pass live quote/reference prices in the next card.
 - Latest verification: `TASK-026` focused tests -> 5 passed; full `uv run pytest -q` -> 61 passed.
+- `TASK-027` integrates before/after Spot+Earn snapshots and fee-reference lookup into the rebalance flow; persistence remains best-effort and no cost gate is active.
+- Latest verification: `TASK-027` focused tests -> 11 passed; full `uv run pytest -q` -> 63 passed.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up

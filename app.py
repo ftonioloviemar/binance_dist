@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -44,6 +45,7 @@ from portfolio import (
     validate_target_map,
 )
 from openrouter_model_curator import refresh_openrouter_models
+from performance_store import build_portfolio_snapshot, record_portfolio_snapshot
 
 logger = logging.getLogger("rebalance")
 
@@ -462,6 +464,16 @@ def run_rebalance(args: argparse.Namespace) -> int:
         asset_prices = _ensure_target_prices(
             client, asset_prices, refined_targets, args.quote
         )
+        before_performance = _build_performance_snapshot_payload(
+            run_id=auditor.run_id or "unknown",
+            phase="before",
+            quote=args.quote,
+            spot_balances=balances,
+            earn_positions=simple_earn_positions,
+            prices=asset_prices,
+            timestamp=_performance_timestamp(),
+        )
+        _persist_performance_snapshot(auditor, before_performance)
         exchange_filters = client.get_exchange_info()
         auditor.log_step(
             name="exchange_info",
@@ -489,6 +501,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
             ),
         )
         if not decision.rebalance_needed:
+            _persist_performance_snapshot(
+                auditor, {**before_performance, "phase": "after"}
+            )
             auditor.finalize_run("skipped")
             logger.info("No rebalance required. Portfolio within drift limits.")
             return 0
@@ -538,6 +553,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
             )
             if pendings:
                 _log_pendings(auditor, pendings)
+            _persist_performance_snapshot(
+                auditor, {**before_performance, "phase": "after"}
+            )
             auditor.finalize_run("skipped")
             logger.info(
                 "No tradable orders after applying filters and notional limits."
@@ -579,6 +597,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
         if not trades:
             if pendings:
                 _log_pendings(auditor, pendings)
+            _persist_performance_snapshot(
+                auditor, {**before_performance, "phase": "after"}
+            )
             auditor.finalize_run("noop")
             logger.info(
                 "No eligible trades after applying filters and notional limits."
@@ -605,6 +626,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
         if not trades:
             if pendings:
                 _log_pendings(auditor, pendings)
+            _persist_performance_snapshot(
+                auditor, {**before_performance, "phase": "after"}
+            )
             auditor.finalize_run("skipped")
             logger.info("All planned trades blocked by anti-churn cooldown.")
             return 0
@@ -635,6 +659,9 @@ def run_rebalance(args: argparse.Namespace) -> int:
             status="in_progress",
             detail=f"{len(trades)} trades planned",
         )
+        fee_reference_prices = _fetch_fee_reference_prices(
+            client, args.quote, asset_prices, auditor
+        )
         execute_trades(
             trades=trades,
             client=client,
@@ -642,6 +669,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             available_balances=available_balances,
             pendings=pendings,
+            reference_prices=fee_reference_prices,
         )
         auditor.log_step(
             name="execution", status="completed", detail="Trades processed"
@@ -674,6 +702,17 @@ def run_rebalance(args: argparse.Namespace) -> int:
             logger.warning(detail)
 
         _print_summary(full_snapshot, final_snapshot)
+        after_performance = _build_performance_snapshot_payload(
+            run_id=auditor.run_id or "unknown",
+            phase="after",
+            quote=args.quote,
+            spot_balances=latest_balances,
+            earn_positions=simple_earn_positions,
+            prices=latest_prices if "latest_prices" in locals() else asset_prices,
+            timestamp=_performance_timestamp(),
+            data_quality="simulation" if args.dry_run else "complete",
+        )
+        _persist_performance_snapshot(auditor, after_performance)
         if env_settings.simple_earn_enabled and simple_earn_by_asset:
             _subscribe_simple_earn_balances(
                 client=client,
@@ -746,6 +785,89 @@ def _balances_from_earn(positions: Sequence[SimpleEarnPosition]) -> list[Balance
         Balance(asset=asset, free=amount, locked=0.0)
         for asset, amount in aggregated.items()
     ]
+
+
+def _build_performance_snapshot_payload(
+    *,
+    run_id: str,
+    phase: str,
+    quote: str,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+    prices: Mapping[str, float],
+    timestamp: str,
+    data_quality: str | None = None,
+) -> dict[str, Any]:
+    return build_portfolio_snapshot(
+        run_id=run_id,
+        phase=phase,
+        quote_asset=quote,
+        spot_balances=[
+            {"asset": balance.asset, "quantity": balance.total}
+            for balance in spot_balances
+        ],
+        earn_positions=[
+            {"asset": position.asset, "quantity": position.total_amount}
+            for position in earn_positions
+        ],
+        prices=prices,
+        timestamp=timestamp,
+        data_quality=data_quality,
+    )
+
+
+def _persist_performance_snapshot(
+    auditor: AuditLogger,
+    payload: Mapping[str, Any],
+) -> None:
+    try:
+        record_portfolio_snapshot(None, payload)
+        detail = json.dumps(
+            {
+                "phase": payload.get("phase"),
+                "total_value": payload.get("total_value"),
+                "spot_value": payload.get("spot_value"),
+                "earn_value": payload.get("earn_value"),
+                "data_quality": payload.get("data_quality"),
+                "missing_prices": payload.get("missing_prices", []),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        auditor.log_step(name="portfolio_snapshot", status="info", detail=detail)
+    except Exception as exc:  # pragma: no cover - defensive persistence guard
+        auditor.log_step(
+            name="portfolio_snapshot",
+            status="warning",
+            detail=f"Persistence skipped: {exc}",
+        )
+
+
+def _performance_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _fetch_fee_reference_prices(
+    client: BinanceClient,
+    quote: str,
+    prices: Mapping[str, float],
+    auditor: AuditLogger,
+) -> dict[str, float]:
+    references = dict(prices)
+    if quote.upper() == "BNB" or "BNB" in references:
+        return references
+    try:
+        ticker_prices = client.get_prices(symbols=[f"BNB{quote.upper()}"])
+        for symbol, price in ticker_prices.items():
+            if symbol.upper() == f"BNB{quote.upper()}":
+                references["BNB"] = price
+    except Exception as exc:  # pragma: no cover - exchange/network guard
+        auditor.log_step(
+            name="fee_reference_prices",
+            status="warning",
+            detail=f"BNB conversion unavailable: {exc}",
+        )
+    return references
 
 
 def _build_holdings_context(
