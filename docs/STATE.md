@@ -58,6 +58,7 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest verification: `TASK-031` focused tests -> 1 passed; full `uv run pytest -q` -> 74 passed.
 - `TASK-032` documents performance interpretation, cost-gate configuration, attribution limits, and lessons learned; SQLite schema is version 2.
 - Latest verification: `TASK-032` full `uv run pytest -q` -> 74 passed; `git diff --check` and performance JSON smoke passed.
+- Integrated dry-run `7c6e041dc5f04b1a8bb706085dd33ff7` completed with five simulated trades; audit recorded `cost_gate=uncalibrated`/allowed and before/after snapshots. Simple Earn `LD*` assets remain an explicit incomplete-price data gap.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up
