@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-09-18.
+Last updated: 2026-09-21.
 
 ## Purpose
 
@@ -42,6 +42,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest completed cards: `TASK-020`, `TASK-021`, `TASK-022`, `TASK-023`, and `TASK-024` operational resilience/strategy activation.
 - `TASK-024` verified that `run_prod.bat` applies adaptive strategy in a dry-run; the Windows task remains `Ready` and points to that launcher. Observe upcoming scheduled run audits for `adaptive_strategy` before evaluating practical results.
 - Latest verification: `uv run pytest -q` -> 54 passed; adaptive launcher dry-run `4462f11c56904297bb6ce00f950c49f0` completed without live orders.
+- Current financial-observability work: `TASK-025` persists decimal portfolio snapshots for Spot and Simple Earn in SQLite under `state/`, with data-quality and missing-price markers; no cost gate is active yet.
+- Latest verification: `TASK-025` focused tests -> 3 passed; full `uv run pytest -q` -> 57 passed.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up
