@@ -22,6 +22,7 @@ def execute_trades(
     dry_run: bool,
     available_balances: Dict[str, float] | None = None,
     pendings: list[str] | None = None,
+    reference_prices: Mapping[str, Decimal | float | str] | None = None,
 ) -> List[ExecutionResult]:
     reports: List[ExecutionResult] = []
     balances = available_balances if available_balances is not None else {}
@@ -95,7 +96,12 @@ def execute_trades(
                 quantity=trade.quantity,
                 price=trade.limit_price or trade.price,
                 status=report.status,
-                detail=_format_order_detail(response, client_order_id),
+                detail=_format_order_detail(
+                    response,
+                    client_order_id,
+                    quote_asset=trade.quote,
+                    reference_prices=reference_prices or {},
+                ),
             )
 
         if trade.side == "SELL":
@@ -115,12 +121,145 @@ def execute_trades(
     return reports
 
 
-def _format_order_detail(response: Mapping[str, Any], fallback_client_order_id: str) -> str:
+def _format_order_detail(
+    response: Mapping[str, Any],
+    fallback_client_order_id: str,
+    *,
+    quote_asset: str,
+    reference_prices: Mapping[str, Decimal | float | str],
+) -> str:
     client_order_id = str(response.get("clientOrderId", fallback_client_order_id))
     commissions = _summarize_commissions(response)
-    if not commissions:
-        return client_order_id
-    return f"clientOrderId={client_order_id}; commission={commissions}"
+    detail = f"clientOrderId={client_order_id}"
+    if commissions:
+        detail += f"; commission={commissions}"
+    cost = summarize_execution_cost(
+        response,
+        quote_asset=quote_asset,
+        reference_prices=reference_prices,
+    )
+    if cost["gross_notional"] != "0.00":
+        detail += (
+            f"; gross_notional={cost['gross_notional']}"
+            f"; avg_fill_price={cost['average_fill_price']}"
+            f"; commission_quote={cost['commission_quote'] or 'unknown'}"
+            f"; commission_bps={cost['commission_bps'] or 'unknown'}"
+            f"; conversion={cost['conversion_status']}"
+        )
+    return detail
+
+
+def summarize_execution_cost(
+    response: Mapping[str, Any],
+    *,
+    quote_asset: str,
+    reference_prices: Mapping[str, Decimal | float | str],
+) -> dict[str, Any]:
+    """Summarize exchange-reported fills without guessing missing conversions."""
+    quote = quote_asset.upper()
+    fills = response.get("fills")
+    fill_rows = [fill for fill in fills if isinstance(fill, Mapping)] if isinstance(fills, list) else []
+    executed_quantity = _decimal(response.get("executedQty")) or Decimal("0")
+    fill_notional = Decimal("0")
+    fill_quantity = Decimal("0")
+    for fill in fill_rows:
+        quantity = _decimal(fill.get("qty"))
+        price = _decimal(fill.get("price"))
+        if quantity is not None:
+            fill_quantity += quantity
+        if quantity is not None and price is not None:
+            fill_notional += quantity * price
+    if executed_quantity <= 0:
+        executed_quantity = fill_quantity
+    gross_notional = _decimal(response.get("cummulativeQuoteQty")) or fill_notional
+
+    commission_totals: dict[str, Decimal] = {}
+    for fill in fill_rows:
+        asset = str(fill.get("commissionAsset", "")).upper()
+        commission = _decimal(fill.get("commission"))
+        if asset and commission is not None:
+            commission_totals[asset] = commission_totals.get(asset, Decimal("0")) + commission
+
+    converted_commission = Decimal("0")
+    unknown_assets: list[str] = []
+    normalized_prices = {asset.upper(): _decimal(value) for asset, value in reference_prices.items()}
+    for asset, commission in commission_totals.items():
+        if asset == quote:
+            converted_commission += commission
+            continue
+        price = normalized_prices.get(asset)
+        if price is None or price <= 0:
+            unknown_assets.append(asset)
+            continue
+        converted_commission += commission * price
+
+    if not commission_totals:
+        conversion_status = "not_available"
+    elif unknown_assets and len(unknown_assets) < len(commission_totals):
+        conversion_status = "partial"
+    elif unknown_assets:
+        conversion_status = "unknown"
+    else:
+        conversion_status = "complete"
+
+    commission_quote = (
+        _money8(converted_commission)
+        if commission_totals and not unknown_assets
+        else None
+    )
+    commission_bps = (
+        _bps(converted_commission, gross_notional)
+        if commission_quote is not None and gross_notional > 0
+        else None
+    )
+    return {
+        "symbol": str(response.get("symbol", "")),
+        "status": str(response.get("status", "")),
+        "order_id": str(response.get("orderId", "")) or None,
+        "executed_quantity": _quantity8(executed_quantity),
+        "gross_notional": _money(gross_notional),
+        "average_fill_price": _price8(gross_notional / executed_quantity) if executed_quantity > 0 else None,
+        "commission_by_asset": {
+            asset: _decimal_text(amount) for asset, amount in sorted(commission_totals.items())
+        },
+        "commission_quote": commission_quote,
+        "commission_bps": commission_bps,
+        "conversion_status": conversion_status,
+        "unknown_conversion_assets": sorted(unknown_assets),
+    }
+
+
+def _decimal(value: Any) -> Decimal | None:
+    if value in (None, "") or isinstance(value, bool):
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _decimal_text(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def _quantity8(value: Decimal) -> str:
+    return format(value.quantize(Decimal("0.00000001")), "f")
+
+
+def _price8(value: Decimal) -> str:
+    return format(value.quantize(Decimal("0.00000001")), "f")
+
+
+def _money(value: Decimal) -> str:
+    return format(value.quantize(Decimal("0.01")), "f")
+
+
+def _money8(value: Decimal) -> str:
+    return format(value.quantize(Decimal("0.00000001")), "f")
+
+
+def _bps(value: Decimal, notional: Decimal) -> str:
+    return format((value / notional * Decimal("10000")).quantize(Decimal("0.000001")), "f")
 
 
 def _summarize_commissions(response: Mapping[str, Any]) -> str:

@@ -44,6 +44,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest verification: `uv run pytest -q` -> 54 passed; adaptive launcher dry-run `4462f11c56904297bb6ce00f950c49f0` completed without live orders.
 - Current financial-observability work: `TASK-025` persists decimal portfolio snapshots for Spot and Simple Earn in SQLite under `state/`, with data-quality and missing-price markers; no cost gate is active yet.
 - Latest verification: `TASK-025` focused tests -> 3 passed; full `uv run pytest -q` -> 57 passed.
+- `TASK-026` adds fill-level effective-cost summarization and compatible audit detail fields; app integration will pass live quote/reference prices in the next card.
+- Latest verification: `TASK-026` focused tests -> 5 passed; full `uv run pytest -q` -> 61 passed.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up
