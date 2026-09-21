@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from performance_store import load_portfolio_snapshots
+from performance_store import load_execution_costs, load_portfolio_snapshots
 
 
 def compare_snapshots(
@@ -69,6 +69,11 @@ def build_performance_report(
         for snapshot in load_portfolio_snapshots(db_path)
         if _parse_timestamp(snapshot.get("timestamp")) >= cutoff
     ]
+    execution_costs = [
+        cost
+        for cost in load_execution_costs(db_path)
+        if cutoff <= _parse_timestamp(cost.get("timestamp")) <= current
+    ]
     pairs: dict[str, dict[str, Mapping[str, Any]]] = {}
     for snapshot in snapshots:
         run_id = str(snapshot.get("run_id", ""))
@@ -80,9 +85,9 @@ def build_performance_report(
         "days": days,
         "generated_at": current.isoformat(),
         "horizons": {
-            "24h": _build_horizon(pairs, current - timedelta(hours=24), current),
-            "7d": _build_horizon(pairs, current - timedelta(days=7), current),
-            "30d": _build_horizon(pairs, current - timedelta(days=30), current),
+            "24h": _build_horizon(pairs, execution_costs, current - timedelta(hours=24), current),
+            "7d": _build_horizon(pairs, execution_costs, current - timedelta(days=7), current),
+            "30d": _build_horizon(pairs, execution_costs, current - timedelta(days=30), current),
         },
     }
     return report
@@ -110,6 +115,7 @@ def render_performance_report(
 
 def _build_horizon(
     pairs: Mapping[str, Mapping[str, Mapping[str, Any]]],
+    execution_costs: list[Mapping[str, Any]],
     cutoff: datetime,
     current: datetime,
 ) -> dict[str, Any]:
@@ -129,6 +135,12 @@ def _build_horizon(
     first_before = eligible[0][2]
     last_after = max(eligible, key=lambda item: item[1])[3]
     result = compare_snapshots(first_before, last_after)
+    costs = [
+        cost for cost in execution_costs
+        if _parse_timestamp(cost.get("timestamp")) >= eligible[0][0]
+        and _parse_timestamp(cost.get("timestamp")) <= max(eligible, key=lambda item: item[1])[1]
+    ]
+    result["execution_cost"] = _aggregate_execution_costs(costs)
     result.update(
         {
             "status": "ok",
@@ -138,6 +150,26 @@ def _build_horizon(
         }
     )
     return result
+
+
+def _aggregate_execution_costs(costs: list[Mapping[str, Any]]) -> dict[str, Any]:
+    gross = sum((_decimal(cost.get("gross_notional")) or Decimal("0") for cost in costs), Decimal("0"))
+    commission = sum(
+        (_decimal(cost.get("commission_quote")) or Decimal("0") for cost in costs),
+        Decimal("0"),
+    )
+    unknown = sum(1 for cost in costs if cost.get("conversion_status") != "complete")
+    return {
+        "orders": len(costs),
+        "gross_notional": _money(gross),
+        "commission_quote": _money(commission) if unknown == 0 else None,
+        "conversion_unknown_orders": unknown,
+        "commission_bps": (
+            format((commission / gross * Decimal("10000")).quantize(Decimal("0.000001")), "f")
+            if gross > 0 and unknown == 0
+            else None
+        ),
+    }
 
 
 def _parse_timestamp(value: Any) -> datetime:

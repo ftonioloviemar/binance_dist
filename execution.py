@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Mapping
 
 import requests
@@ -9,6 +10,7 @@ import requests
 from binance_client import BinanceClient
 from logging_audit import AuditLogger
 from portfolio import ExecutionResult, TradeInstruction
+from performance_store import record_execution_cost
 
 
 _TRADE_EPSILON = 1e-12
@@ -103,6 +105,29 @@ def execute_trades(
                     reference_prices=reference_prices or {},
                 ),
             )
+            try:
+                summary = summarize_execution_cost(
+                    response,
+                    quote_asset=trade.quote,
+                    reference_prices=reference_prices or {},
+                )
+                if auditor.run_id and summary["order_id"]:
+                    record_execution_cost(
+                        None,
+                        {
+                            **summary,
+                            "run_id": auditor.run_id,
+                            "order_id": summary["order_id"],
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "side": trade.side,
+                        },
+                    )
+            except Exception as exc:  # pragma: no cover - defensive persistence guard
+                auditor.log_step(
+                    name="execution_cost",
+                    status="warning",
+                    detail=f"Persistence skipped: {exc}",
+                )
 
         if trade.side == "SELL":
             balances[trade.asset] = max(0.0, asset_balance - trade.quantity)

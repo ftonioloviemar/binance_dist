@@ -54,6 +54,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest verification: `TASK-029` focused tests -> 3 passed; full `uv run pytest -q` -> 69 passed; CLI JSON smoke passed.
 - `TASK-030` adds configurable `off/observe/enforce` cost policy and audit event before execution; default `observe`, and uncalibrated data never blocks.
 - Latest verification: `TASK-030` focused tests -> 19 passed; full `uv run pytest -q` -> 73 passed.
+- `TASK-031` persists real execution costs and aggregates gross notional, commission, bps, and unknown conversions in performance horizons; dry-run costs are not persisted.
+- Latest verification: `TASK-031` focused tests -> 1 passed; full `uv run pytest -q` -> 74 passed.
 - Next safe verification: `uv run pytest`.
 
 ## Known Follow-Up

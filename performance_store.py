@@ -188,6 +188,65 @@ def load_external_flows(
     return [dict(zip(fields, row)) for row in rows]
 
 
+def record_execution_cost(
+    db_path: str | Path | None,
+    cost: Mapping[str, Any],
+) -> None:
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as connection:
+        _ensure_schema(connection)
+        connection.execute(
+            """
+            INSERT INTO execution_costs(
+                run_id, order_id, timestamp, symbol, side, gross_notional,
+                commission_quote, commission_bps, conversion_status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id, order_id) DO UPDATE SET
+                timestamp=excluded.timestamp,
+                symbol=excluded.symbol,
+                side=excluded.side,
+                gross_notional=excluded.gross_notional,
+                commission_quote=excluded.commission_quote,
+                commission_bps=excluded.commission_bps,
+                conversion_status=excluded.conversion_status
+            """,
+            (
+                str(cost["run_id"]),
+                str(cost["order_id"]),
+                str(cost["timestamp"]),
+                str(cost.get("symbol", "")),
+                str(cost.get("side", "")).upper(),
+                str(cost.get("gross_notional", "0.00")),
+                cost.get("commission_quote"),
+                cost.get("commission_bps"),
+                str(cost.get("conversion_status", "unknown")),
+            ),
+        )
+
+
+def load_execution_costs(
+    db_path: str | Path | None,
+    *,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    if not path.exists():
+        return []
+    query = "SELECT run_id, order_id, timestamp, symbol, side, gross_notional, commission_quote, commission_bps, conversion_status FROM execution_costs ORDER BY timestamp ASC"
+    parameters: list[Any] = []
+    if limit is not None:
+        query += " LIMIT ?"
+        parameters.append(limit)
+    with sqlite3.connect(path) as connection:
+        rows = connection.execute(query, parameters).fetchall()
+    fields = (
+        "run_id", "order_id", "timestamp", "symbol", "side", "gross_notional",
+        "commission_quote", "commission_bps", "conversion_status",
+    )
+    return [dict(zip(fields, row)) for row in rows]
+
+
 def _ensure_schema(connection: sqlite3.Connection) -> None:
     connection.execute(
         "CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
@@ -208,6 +267,22 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             external_flow_status TEXT NOT NULL,
             missing_prices_json TEXT NOT NULL,
             PRIMARY KEY (run_id, phase)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS execution_costs (
+            run_id TEXT NOT NULL,
+            order_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            gross_notional TEXT NOT NULL,
+            commission_quote TEXT,
+            commission_bps TEXT,
+            conversion_status TEXT NOT NULL,
+            PRIMARY KEY (run_id, order_id)
         )
         """
     )
