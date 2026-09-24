@@ -12,9 +12,16 @@ uv run python app.py performance --days 30 --json
 ```
 
 O relatório mostra as janelas 24h, 7d e 30d. `observed_change` é apenas a
-variação de valor entre snapshots. `hold_change` é o contrafactual de manter as
-quantidades iniciais nos preços finais. Nenhum dos dois é chamado de lucro
-quando `attribution_status` é `not_attributed` ou `incomplete`.
+variação de valor entre snapshots completos. Se um snapshot não tem qualidade
+`complete`, o relatório deixa `observed_change` e `hold_change` desconhecidos.
+`hold_change` é o contrafactual de manter as quantidades iniciais nos preços
+finais. Nenhum dos dois é chamado de lucro quando `attribution_status` é
+`not_attributed` ou `incomplete`.
+
+Depois de operações em Simple Earn, o snapshot final atualiza Spot e Earn após
+resgates e subscrições. Se a consulta inicial ou qualquer consulta pós-operação
+falhar, os valores podem ser registrados para diagnóstico, mas a qualidade fica
+`incomplete` e as variações não são exibidas como válidas.
 
 ## Custos
 

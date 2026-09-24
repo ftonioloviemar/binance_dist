@@ -15,7 +15,11 @@ def compare_snapshots(
 ) -> dict[str, Any]:
     start_value = _decimal(before.get("total_value")) or Decimal("0")
     end_value = _decimal(after.get("total_value")) or Decimal("0")
-    observed_change = end_value - start_value
+    snapshots_complete = (
+        before.get("data_quality") == "complete"
+        and after.get("data_quality") == "complete"
+    )
+    observed_change = end_value - start_value if snapshots_complete else None
     missing_assets: set[str] = set()
     hold_value = Decimal("0")
     before_prices = before.get("prices", {})
@@ -37,9 +41,13 @@ def compare_snapshots(
             continue
         hold_value += asset_value / start_price * end_price
 
-    hold_change = hold_value - start_value if not missing_assets else None
+    hold_change = (
+        hold_value - start_value
+        if not missing_assets and snapshots_complete
+        else None
+    )
     attribution_status = "complete"
-    if missing_assets:
+    if missing_assets or not snapshots_complete:
         attribution_status = "incomplete"
     elif before.get("external_flow_status") != "reconciled" or after.get("external_flow_status") != "reconciled":
         attribution_status = "not_attributed"
@@ -47,7 +55,9 @@ def compare_snapshots(
     return {
         "start_value": _money(start_value),
         "end_value": _money(end_value),
-        "observed_change": _money(observed_change),
+        "observed_change": (
+            _money(observed_change) if observed_change is not None else None
+        ),
         "hold_value": _money(hold_value) if hold_change is not None else None,
         "hold_change": _money(hold_change) if hold_change is not None else None,
         "attribution_status": attribution_status,
@@ -102,11 +112,20 @@ def render_performance_report(
         return json.dumps(report, sort_keys=True, indent=2)
     lines = [f"Performance report (last {report.get('days', '?')} days)"]
     for horizon, data in report.get("horizons", {}).items():
-        if data.get("status") != "ok":
+        if data.get("status") == "no_data":
             lines.append(f"{horizon}: no data")
             continue
+        if data.get("status") == "incomplete":
+            lines.append(
+                f"{horizon}: incomplete data; observed=unknown hold=unknown"
+            )
+            continue
+        observed_change = data.get("observed_change")
+        observed_label = (
+            observed_change if observed_change is not None else "unknown"
+        )
         lines.append(
-            f"{horizon}: observed={data['observed_change']} "
+            f"{horizon}: observed={observed_label} "
             f"hold={data['hold_change'] or 'unknown'} "
             f"attribution={data['attribution_status']} runs={data['runs']}"
         )
@@ -143,7 +162,11 @@ def _build_horizon(
     result["execution_cost"] = _aggregate_execution_costs(costs)
     result.update(
         {
-            "status": "ok",
+            "status": (
+                "incomplete"
+                if result["attribution_status"] == "incomplete"
+                else "ok"
+            ),
             "runs": len(eligible),
             "start_timestamp": first_before.get("timestamp"),
             "end_timestamp": last_after.get("timestamp"),

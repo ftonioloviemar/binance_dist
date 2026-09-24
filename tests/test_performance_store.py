@@ -76,3 +76,19 @@ def test_snapshot_marks_missing_price_as_incomplete(tmp_path) -> None:
     assert payload["data_quality"] == "incomplete"
     assert payload["missing_prices"] == ["ADA"]
     assert payload["total_value"] == "0.00"
+
+
+def test_explicit_complete_quality_cannot_override_missing_prices() -> None:
+    payload = build_portfolio_snapshot(
+        run_id="run-missing-price",
+        phase="after",
+        quote_asset="USDT",
+        spot_balances=[{"asset": "ADA", "quantity": Decimal("5")}],
+        earn_positions=[],
+        prices={},
+        timestamp="2026-09-24T12:00:00+00:00",
+        data_quality="complete",
+    )
+
+    assert payload["data_quality"] == "incomplete"
+    assert payload["missing_prices"] == ["ADA"]

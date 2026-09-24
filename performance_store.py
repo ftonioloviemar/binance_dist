@@ -49,6 +49,8 @@ def build_portfolio_snapshot(
             source_totals[source] += value
 
     quality = data_quality or ("incomplete" if missing_prices else "complete")
+    if missing_prices and quality == "complete":
+        quality = "incomplete"
     return {
         "run_id": run_id,
         "phase": phase,

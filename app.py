@@ -225,6 +225,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
     simple_earn_positions: list[SimpleEarnPosition] = []
     simple_earn_products: dict[str, SimpleEarnProduct] = {}
     simple_earn_by_asset: dict[str, SimpleEarnProduct] = {}
+    simple_earn_snapshot_quality = "complete"
 
     try:
         balances = client.get_account_balances()
@@ -245,6 +246,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 pendings.append(f"Simple Earn snapshot failed: {exc}")
                 auditor.log_step(name="earn_snapshot", status="failed", detail=str(exc))
                 simple_earn_positions = []
+                simple_earn_snapshot_quality = "incomplete"
             try:
                 simple_earn_products = client.get_simple_earn_flexible_products()
                 exclude = env_settings.simple_earn_exclude_assets or set()
@@ -504,6 +506,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
             earn_positions=simple_earn_positions,
             prices=asset_prices,
             timestamp=_performance_timestamp(),
+            data_quality=simple_earn_snapshot_quality,
         )
         _persist_performance_snapshot(auditor, before_performance)
         exchange_filters = client.get_exchange_info()
@@ -740,6 +743,8 @@ def run_rebalance(args: argparse.Namespace) -> int:
         )
         final_snapshot = snapshot
         latest_balances = balances
+        latest_prices = asset_prices
+        latest_balances_refresh_succeeded = False
         try:
             final_balances = client.get_account_balances()
             latest_prices = _fetch_asset_prices(
@@ -749,6 +754,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 final_balances, latest_prices, args.quote
             )
             latest_balances = final_balances
+            latest_balances_refresh_succeeded = True
         except PortfolioError as exc:
             detail = f"Failed to refresh final balances: {exc}"
             if args.dry_run and "empty portfolio" in str(exc).lower():
@@ -766,26 +772,23 @@ def run_rebalance(args: argparse.Namespace) -> int:
             logger.warning(detail)
 
         _print_summary(full_snapshot, final_snapshot)
-        after_performance = _build_performance_snapshot_payload(
+        after_performance = _build_post_trade_performance_snapshot_payload(
+            client=client,
+            auditor=auditor,
             run_id=auditor.run_id or "unknown",
-            phase="after",
             quote=args.quote,
             spot_balances=latest_balances,
             earn_positions=simple_earn_positions,
-            prices=latest_prices if "latest_prices" in locals() else asset_prices,
+            prices=latest_prices,
+            targets=refined_targets,
             timestamp=_performance_timestamp(),
-            data_quality="simulation" if args.dry_run else "complete",
+            products_by_asset=simple_earn_by_asset,
+            simple_earn_enabled=env_settings.simple_earn_enabled,
+            dry_run=args.dry_run,
+            spot_balances_fresh=latest_balances_refresh_succeeded,
+            pendings=pendings,
         )
         _persist_performance_snapshot(auditor, after_performance)
-        if env_settings.simple_earn_enabled and simple_earn_by_asset:
-            _subscribe_simple_earn_balances(
-                client=client,
-                balances=latest_balances,
-                products_by_asset=simple_earn_by_asset,
-                dry_run=args.dry_run,
-                auditor=auditor,
-                pendings=pendings,
-            )
         if pendings:
             _log_pendings(auditor, pendings)
         auditor.finalize_run("completed")
@@ -884,6 +887,110 @@ def _build_performance_snapshot_payload(
             for position in earn_positions
         ],
         prices=prices,
+        timestamp=timestamp,
+        data_quality=data_quality,
+    )
+
+
+def _build_post_trade_performance_snapshot_payload(
+    *,
+    client: BinanceClient,
+    auditor: AuditLogger,
+    run_id: str,
+    quote: str,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+    prices: Mapping[str, float],
+    targets: Mapping[str, float],
+    timestamp: str,
+    products_by_asset: Mapping[str, SimpleEarnProduct],
+    simple_earn_enabled: bool,
+    dry_run: bool,
+    spot_balances_fresh: bool,
+    pendings: list[str],
+) -> dict[str, Any]:
+    latest_balances = list(spot_balances)
+    latest_earn_positions = list(earn_positions)
+    latest_prices = dict(prices)
+    data_quality = "simulation" if dry_run else "complete"
+
+    if simple_earn_enabled and products_by_asset:
+        if dry_run or spot_balances_fresh:
+            _subscribe_simple_earn_balances(
+                client=client,
+                balances=latest_balances,
+                products_by_asset=products_by_asset,
+                dry_run=dry_run,
+                auditor=auditor,
+                pendings=pendings,
+            )
+        else:
+            detail = (
+                "Skipped Simple Earn subscription because current Spot balances "
+                "could not be confirmed"
+            )
+            pendings.append(detail)
+            auditor.log_step(name="earn_subscribe", status="skipped", detail=detail)
+
+    if not dry_run:
+        try:
+            latest_balances = client.get_account_balances()
+            auditor.log_step(
+                name="spot_snapshot_after",
+                status="completed",
+                detail=f"Fetched {len(latest_balances)} post-operation Spot balances",
+            )
+        except Exception:
+            data_quality = "incomplete"
+            detail = "Failed to refresh post-operation Spot balances; snapshot is incomplete"
+            pendings.append(detail)
+            auditor.log_step(name="spot_snapshot_after", status="failed", detail=detail)
+
+        try:
+            latest_earn_positions = client.get_simple_earn_flexible_positions()
+            auditor.log_step(
+                name="earn_snapshot_after",
+                status="completed",
+                detail=(
+                    "Fetched "
+                    f"{len(latest_earn_positions)} post-operation Simple Earn positions"
+                ),
+            )
+        except Exception:
+            # The positions captured before redemption are stale. Never reuse them
+            # when the post-operation query fails.
+            latest_earn_positions = []
+            data_quality = "incomplete"
+            detail = (
+                "Failed to refresh post-operation Simple Earn positions; "
+                "snapshot is incomplete"
+            )
+            pendings.append(detail)
+            auditor.log_step(
+                name="earn_snapshot_after", status="failed", detail=detail
+            )
+
+        combined_balances = [
+            *latest_balances,
+            *_balances_from_earn(latest_earn_positions),
+        ]
+        try:
+            latest_prices = _fetch_asset_prices(
+                client, combined_balances, targets, quote
+            )
+        except Exception:
+            data_quality = "incomplete"
+            detail = "Failed to refresh post-operation asset prices; snapshot is incomplete"
+            pendings.append(detail)
+            auditor.log_step(name="prices_snapshot_after", status="failed", detail=detail)
+
+    return _build_performance_snapshot_payload(
+        run_id=run_id,
+        phase="after",
+        quote=quote,
+        spot_balances=latest_balances,
+        earn_positions=latest_earn_positions,
+        prices=latest_prices,
         timestamp=timestamp,
         data_quality=data_quality,
     )

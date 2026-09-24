@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-09-21.
+Last updated: 2026-09-24.
 
 ## Purpose
 
@@ -59,7 +59,9 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - `TASK-032` documents performance interpretation, cost-gate configuration, attribution limits, and lessons learned; SQLite schema is version 2.
 - Latest verification: `TASK-032` full `uv run pytest -q` -> 74 passed; `git diff --check` and performance JSON smoke passed.
 - Integrated dry-run `7c6e041dc5f04b1a8bb706085dd33ff7` completed with five simulated trades; audit recorded `cost_gate=uncalibrated`/allowed and before/after snapshots. Simple Earn `LD*` assets remain an explicit incomplete-price data gap.
-- Next safe verification: `uv run pytest`.
+- `TASK-034` refreshes Spot and Earn after trades/subscriptions, suppresses performance deltas for incomplete snapshots, and invalidates two confirmed duplicate `after` snapshots while preserving their values and SQLite backup.
+- Latest verification: `TASK-034` full suite -> 82 passed with test-only settings; report against the corrected SQLite shows incomplete/unknown deltas in 24h, 7d, and 30d. No live exchange calls.
+- Next safe verification: inspect `spot_snapshot_after` and `earn_snapshot_after` audit statuses on the next scheduled run after integrating the change.
 
 ## Known Follow-Up
 
