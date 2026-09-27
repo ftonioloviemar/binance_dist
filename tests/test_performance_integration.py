@@ -31,6 +31,42 @@ def test_build_performance_snapshot_payload_separates_spot_and_earn() -> None:
     assert json.loads(json.dumps(payload))["data_quality"] == "complete"
 
 
+def test_snapshot_excludes_ld_alias_when_underlying_is_in_simple_earn() -> None:
+    payload = app._build_performance_snapshot_payload(
+        run_id="run-ld-alias",
+        phase="before",
+        quote="USDT",
+        spot_balances=[
+            Balance(asset="LDBTC", free=0.01, locked=0.0),
+            Balance(asset="BTC", free=0.005, locked=0.0),
+        ],
+        earn_positions=[_earn_position("BTC", 0.01)],
+        prices={"BTC": 20000.0},
+        timestamp="2026-09-27T12:00:00+00:00",
+    )
+
+    assert payload["spot_value"] == "100.00"
+    assert payload["earn_value"] == "200.00"
+    assert payload["total_value"] == "300.00"
+    assert payload["data_quality"] == "complete"
+    assert payload["missing_prices"] == []
+
+
+def test_snapshot_keeps_unmatched_ld_alias_incomplete() -> None:
+    payload = app._build_performance_snapshot_payload(
+        run_id="run-unmatched-ld-alias",
+        phase="before",
+        quote="USDT",
+        spot_balances=[Balance(asset="LDXYZ", free=1.0, locked=0.0)],
+        earn_positions=[],
+        prices={},
+        timestamp="2026-09-27T12:00:00+00:00",
+    )
+
+    assert payload["data_quality"] == "incomplete"
+    assert payload["missing_prices"] == ["LDXYZ"]
+
+
 def test_build_performance_snapshot_payload_marks_simulation() -> None:
     payload = app._build_performance_snapshot_payload(
         run_id="run-1",

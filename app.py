@@ -874,13 +874,26 @@ def _build_performance_snapshot_payload(
     timestamp: str,
     data_quality: str | None = None,
 ) -> dict[str, Any]:
+    earn_assets = {
+        position.asset.upper()
+        for position in earn_positions
+        if position.total_amount > 0
+    }
+    snapshot_spot_balances = [
+        balance
+        for balance in spot_balances
+        if not (
+            balance.asset.upper().startswith("LD")
+            and balance.asset.upper()[2:] in earn_assets
+        )
+    ]
     return build_portfolio_snapshot(
         run_id=run_id,
         phase=phase,
         quote_asset=quote,
         spot_balances=[
             {"asset": balance.asset, "quantity": balance.total}
-            for balance in spot_balances
+            for balance in snapshot_spot_balances
         ],
         earn_positions=[
             {"asset": position.asset, "quantity": position.total_amount}

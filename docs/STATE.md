@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-09-24.
+Last updated: 2026-09-27.
 
 ## Purpose
 
@@ -61,7 +61,9 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Integrated dry-run `7c6e041dc5f04b1a8bb706085dd33ff7` completed with five simulated trades; audit recorded `cost_gate=uncalibrated`/allowed and before/after snapshots. Simple Earn `LD*` assets remain an explicit incomplete-price data gap.
 - `TASK-034` refreshes Spot and Earn after trades/subscriptions, suppresses performance deltas for incomplete snapshots, and invalidates two confirmed duplicate `after` snapshots while preserving their values and SQLite backup.
 - Latest verification: `TASK-034` full suite -> 82 passed with test-only settings; report against the corrected SQLite shows incomplete/unknown deltas in 24h, 7d, and 30d. No live exchange calls.
-- Next safe verification: inspect `spot_snapshot_after` and `earn_snapshot_after` audit statuses on the next scheduled run after integrating the change.
+- `TASK-035` removes a Spot `LD<asset>` alias from financial snapshot input only when the matching underlying asset is present in Simple Earn positions; unmatched aliases remain incomplete. Trade/execution balances are unchanged.
+- Latest verification: `TASK-035` RED reproduced incomplete quality; focused integration tests -> 10 passed; full `uv run pytest` -> 84 passed. Current historical report remains incomplete because past SQLite snapshots cannot safely be reconstructed from persisted data; no live exchange calls.
+- Next safe verification: inspect the next newly persisted before/after snapshots and confirm `missing_prices` no longer includes matched `LD*` aliases.
 
 ## Known Follow-Up
 

@@ -14,6 +14,7 @@ This document records reusable engineering and operational lessons from the Bina
 - Quarantine models after `404`, repeated `429`, or invalid output, and keep the existing configured chain as a safe fallback if curation cannot produce a valid registry.
 - Use `FULL` Binance order responses and record fill commissions by asset. Fees must come from exchange execution data, not estimates inferred from configuration.
 - Persist Spot and Simple Earn values separately and compare against a hold benchmark before judging a rebalance. A balance increase is not profit when deposits, withdrawals, Earn movement, or fee conversion are unresolved.
+- Reconcile Spot `LD<asset>` aliases against matching Simple Earn positions in performance snapshots; do not price by blindly stripping `LD` or count both representations. Keep unmatched aliases incomplete, and keep this normalization out of trade balances.
 - Keep cost gates in `observe` until benefit, commission conversion, flow attribution, and benchmark history are calibrated. Unknown inputs must produce `uncalibrated`, not an invented threshold or automatic block.
 - Use unit tests, log replay, and dry-run for changes. Add targeted tests when a normal dry-run takes the `maintain` path and therefore does not exercise trade planning.
 - Complete each kanban card independently: move its file between state directories, record RED/GREEN/full verification evidence, commit, and only then start the next card.
