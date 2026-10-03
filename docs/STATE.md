@@ -73,9 +73,10 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 - Goal: implement the approved "Onda de Melhoria dos Insights de Mercado".
 - Decision: adaptive source reliability may affect live adaptive availability after tests; new candle indicators and volatility guard remain shadow-only and cannot change live targets or OpenRouter advice.
-- Active card: `TASK-037-model-macro-source-quality`.
+- Active card: `TASK-038-enable-adaptive-with-valid-required-sources`.
 - Completed: `TASK-036` documented market-data reliability rules, shadow-session semantics, cost assumptions, and attribution boundaries; see `docs/market-insights.md` and `docs/strategy-scenario-b.md`.
 - Next: execute `TASK-037` through `TASK-044` one card and commit at a time.
 - Strategy comparison is hypothetical and conditional on the advice/targets observed in each real run; use a separate SQLite store, full-precision quantities, explicit cost assumptions, and `incomplete` when data coverage is insufficient.
 - No live trades, Earn operations, production schedule change, automatic strategy activation, or new model calls for shadow evaluation.
 - Verification baseline before this wave: working tree clean at `77ff825`; 21.5 GB free on C:.
+- TASK-037 completed and independently audited: additive source metadata, UTC timestamps, validation, stale/cache classification, and sanitized diagnostics. Final isolated full suite -> 108 passed; no live exchange calls. See its kanban card for evidence.

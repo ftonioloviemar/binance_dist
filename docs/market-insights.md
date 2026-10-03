@@ -13,7 +13,7 @@ This feature improves the reliability of existing macro inputs used by the adapt
 - If either required source is absent, stale, or invalid, retain the selected base profile and CLI settings, and record an explicit fallback reason. If the required sources are valid but CoinGecko is not, adaptive remains eligible and is marked degraded.
 - Preserve explicit-target precedence and the current live adaptive mapping. Healthy inputs must preserve the existing decision.
 
-Every source observation records its source, provider observation timestamp when provided, local UTC collection timestamp, quality (`fresh`, `cached`, `missing`, or `invalid`), age, cache use, and a sanitized failure reason. CoinGecko age derives from its cache's collection timestamp when using cache. Do not persist secrets or account data in the market-data store.
+Every source observation is exposed in additive `MacroSnapshot.sources`, keyed by `fear_greed`, `btc_24h`, and `crypto_global`. Each value has `status` (`fresh`, `cached`, `missing`, or `invalid`), `observed_at` (provider time as ISO-8601 UTC or null), `collected_at` (local ISO-8601 UTC or null), `age_seconds` (nonnegative number or null), `cache_used` (boolean), and `error` (sanitized text or null). Existing `data` keys and `errors` remain available; the new metadata does not get injected into AI holdings context. CoinGecko age derives from its cache's collection timestamp when using cache. Do not persist secrets or account data in the market-data store.
 
 ## Shadow Market Data
 
