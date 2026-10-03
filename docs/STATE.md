@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-09-27.
+Last updated: 2026-10-03.
 
 ## Purpose
 
@@ -68,3 +68,14 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 ## Known Follow-Up
 
 - No current blocker. The integrated dry-run did not exercise trade-floor logging because the portfolio was within drift; unit tests cover that path. The dry-run `final_balances` empty-portfolio warning was addressed in `TASK-012`.
+
+## Current Goal
+
+- Goal: implement the approved "Onda de Melhoria dos Insights de Mercado".
+- Decision: adaptive source reliability may affect live adaptive availability after tests; new candle indicators and volatility guard remain shadow-only and cannot change live targets or OpenRouter advice.
+- Active card: `TASK-037-model-macro-source-quality`.
+- Completed: `TASK-036` documented market-data reliability rules, shadow-session semantics, cost assumptions, and attribution boundaries; see `docs/market-insights.md` and `docs/strategy-scenario-b.md`.
+- Next: execute `TASK-037` through `TASK-044` one card and commit at a time.
+- Strategy comparison is hypothetical and conditional on the advice/targets observed in each real run; use a separate SQLite store, full-precision quantities, explicit cost assumptions, and `incomplete` when data coverage is insufficient.
+- No live trades, Earn operations, production schedule change, automatic strategy activation, or new model calls for shadow evaluation.
+- Verification baseline before this wave: working tree clean at `77ff825`; 21.5 GB free on C:.

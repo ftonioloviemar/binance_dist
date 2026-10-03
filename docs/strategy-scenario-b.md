@@ -32,4 +32,4 @@ Outputs:
 
 Historical logs do not yet contain enough structured price and pre-plan data for a true return backtest. The current harness is a decision-quality replay: it compares whether Scenario B would trade less, skip low-value orders, and reduce turnover/cost pressure.
 
-The next useful step is to extract `ReplayCase` rows from future audit logs after TASK-001 through TASK-003 are in place and enough new runs have accumulated.
+The market-insights wave (`TASK-036` through `TASK-044`) adds a separate prospective shadow portfolio comparison using complete captured snapshots, prices, targets, and execution constraints. Keep this existing harness as a decision-quality proxy; its outputs are not a return backtest. The volatility guard remains shadow-only, and no live threshold or target changes until a separate strategy decision is documented and approved.
