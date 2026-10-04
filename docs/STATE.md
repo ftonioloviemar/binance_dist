@@ -73,7 +73,7 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 - Goal: implement the approved "Onda de Melhoria dos Insights de Mercado".
 - Decision: adaptive source reliability may affect live adaptive availability after tests; new candle indicators and volatility guard remain shadow-only and cannot change live targets or OpenRouter advice.
-- Active card: `TASK-039-collect-closed-market-candles`.
+- Active card: `TASK-040-calculate-and-persist-market-indicators`.
 - Completed: `TASK-036` documented market-data reliability rules, shadow-session semantics, cost assumptions, and attribution boundaries; see `docs/market-insights.md` and `docs/strategy-scenario-b.md`.
 - Next: execute `TASK-037` through `TASK-044` one card and commit at a time.
 - Strategy comparison is hypothetical and conditional on the advice/targets observed in each real run; use a separate SQLite store, full-precision quantities, explicit cost assumptions, and `incomplete` when data coverage is insufficient.
@@ -82,3 +82,4 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - TASK-037 completed and independently audited: additive source metadata, UTC timestamps, validation, stale/cache classification, and sanitized diagnostics. Final isolated full suite -> 108 passed; no live exchange calls. See its kanban card for evidence.
 - TASK-038 implementation verification: focused adaptive tests -> 29 passed; isolated full suite -> 127 passed; compileall and diff check passed. Independent audit found numeric overflow, fixed with regression coverage; final reviewer confirmation is pending. No live exchange calls.
 - TASK-038 completed and independently reviewed with no remaining findings; adaptive source gating is tested and the market-insights contract doc now reflects implementation.
+- TASK-039 completed and independently audited: public closed-candle collector with bounded UTC cache and 20-second budget; focused tests -> 21 passed, isolated full suite -> 148 passed. Follow-up audit found no remaining deadline/persistence findings; late worker test confirms no post-timeout candle writes. No live calls.
