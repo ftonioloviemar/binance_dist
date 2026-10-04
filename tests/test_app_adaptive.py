@@ -3,15 +3,38 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import app
 from binance_client import Balance, SymbolFilters
 from config import EnvSettings
-from logging_audit import load_run_detail
+from logging_audit import AuditLogger, load_run_detail
 from macro_context import MacroSnapshot
 from portfolio import AIAdvice
+
+
+@pytest.fixture(autouse=True)
+def _disable_shadow_observation_in_app_tests(monkeypatch) -> None:
+    monkeypatch.setenv("MARKET_CANDLE_COLLECTION_ENABLED", "false")
+    monkeypatch.setenv("SHADOW_PORTFOLIO_SIMULATION_ENABLED", "false")
+    observed_instances: set[int] = set()
+    original_log_step = AuditLogger.log_step
+    original_finalize_run = AuditLogger.finalize_run
+
+    def track_step(self, *args, **kwargs):
+        if kwargs.get("name") == "market_insights_observation":
+            observed_instances.add(id(self))
+        return original_log_step(self, *args, **kwargs)
+
+    def require_shadow_step(self, status):
+        assert id(self) in observed_instances
+        observed_instances.discard(id(self))
+        return original_finalize_run(self, status)
+
+    monkeypatch.setattr(AuditLogger, "log_step", track_step)
+    monkeypatch.setattr(AuditLogger, "finalize_run", require_shadow_step)
 
 
 def _macro_sources(now: datetime | None = None, *, coingecko_status: str = "fresh"):
@@ -395,13 +418,30 @@ def test_rebalance_audits_adaptive_strategy_after_run_start(
             sources=_macro_sources(coingecko_status=coingecko_status),
         ),
     )
+    ai_calls = []
     monkeypatch.setattr(
         app,
         "ai_refine_targets",
-        lambda **kwargs: AIAdvice(
-            targets=dict(kwargs["proposed_weights"]),
-            action="maintain",
-            rationale="test maintain",
+        lambda **kwargs: (
+            ai_calls.append(kwargs)
+            or AIAdvice(
+                targets=dict(kwargs["proposed_weights"]),
+                action="maintain",
+                rationale="test maintain",
+            )
+        ),
+    )
+    monkeypatch.setenv("MARKET_CANDLE_COLLECTION_ENABLED", "true")
+    monkeypatch.setenv("SHADOW_PORTFOLIO_SIMULATION_ENABLED", "true")
+    captured_shadow_runs = []
+    monkeypatch.setattr(
+        app,
+        "observe_shadow_run",
+        lambda run, **kwargs: (
+            captured_shadow_runs.append((run, kwargs))
+            or SimpleNamespace(
+                status="completed", deadline_exceeded=False, error=None
+            )
         ),
     )
 
@@ -420,10 +460,19 @@ def test_rebalance_audits_adaptive_strategy_after_run_start(
     )
 
     assert app.run_rebalance(args) == 0
+    assert len(ai_calls) == 1
     [run] = app.load_recent_runs(limit=1, logs_dir=tmp_path / "logs")
     detail = load_run_detail(run["run_id"], logs_dir=tmp_path / "logs")
 
     assert detail is not None
+    assert len(captured_shadow_runs) == 1
+    shadow_run, shadow_kwargs = captured_shadow_runs[0]
+    assert shadow_run.session_id == "shadow-usdt-v1"
+    assert shadow_run.run_id == run["run_id"]
+    assert shadow_run.quote_asset == "USDT"
+    assert shadow_run.spot_balances
+    assert shadow_kwargs["collect_enabled"] is True
+    assert shadow_kwargs["simulate_enabled"] is True
     snapshot = detail["run"]["config_snapshot"]
     assert run["profile"] == "conservative"
     assert snapshot["profile"] == "conservative"
@@ -438,6 +487,10 @@ def test_rebalance_audits_adaptive_strategy_after_run_start(
     adaptive_step = next(
         step for step in detail["steps"] if step["name"] == "adaptive_strategy"
     )
+    shadow_step = next(
+        step for step in detail["steps"] if step["name"] == "market_insights_observation"
+    )
+    assert shadow_step["status"] in {"completed", "incomplete", "warning", "skipped"}
     assert "slippage=0.45%" in adaptive_step["detail"]
     assert f"source_quality={source_quality}" in adaptive_step["detail"]
     if explicit_targets is not None:

@@ -7,6 +7,7 @@ import math
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -50,6 +51,13 @@ from openrouter_model_curator import refresh_openrouter_models
 from performance_store import build_portfolio_snapshot, record_portfolio_snapshot
 from performance import build_performance_report, render_performance_report
 from cost_gate import evaluate_cost_gate
+from market_candles import SUPPORTED_ASSETS
+from shadow_observation import (
+    ShadowObservationResult,
+    load_shadow_observation_settings,
+    observe_shadow_run,
+)
+from shadow_portfolios import ShadowRun
 
 logger = logging.getLogger("rebalance")
 
@@ -324,6 +332,58 @@ def run_rebalance(args: argparse.Namespace) -> int:
     )
     auditor = AuditLogger()
     run_started = False
+    shadow_run: ShadowRun | None = None
+    shadow_capture_error: str | None = None
+
+    def finalize_with_shadow(status: str) -> None:
+        if shadow_run is None:
+            auditor.log_step(
+                name="market_insights_observation",
+                status="warning" if shadow_capture_error else "skipped",
+                detail=(
+                    f"Could not capture shadow inputs: {shadow_capture_error}"
+                    if shadow_capture_error
+                    else "No complete pre-decision inputs were captured"
+                ),
+            )
+        else:
+            try:
+                collect_enabled, simulate_enabled = load_shadow_observation_settings()
+                market_assets = tuple(SUPPORTED_ASSETS) + tuple(
+                    asset
+                    for asset in shadow_run.target_weights
+                    if asset.upper() != shadow_run.quote_asset
+                )
+                outcome: ShadowObservationResult = observe_shadow_run(
+                    shadow_run,
+                    assets=market_assets,
+                    collect_enabled=collect_enabled,
+                    simulate_enabled=simulate_enabled,
+                )
+                step_status = {
+                    "completed": "completed",
+                    "collection_only": "completed",
+                    "incomplete": "warning",
+                    "failed": "warning",
+                    "disabled": "skipped",
+                }.get(outcome.status, "warning")
+                detail = f"status={outcome.status}"
+                if outcome.deadline_exceeded:
+                    detail += "; collection_deadline_exceeded=true"
+                if outcome.error:
+                    detail += f"; error={outcome.error}"
+                auditor.log_step(
+                    name="market_insights_observation",
+                    status=step_status,
+                    detail=detail,
+                )
+            except Exception as exc:  # Shadow observability must remain best-effort.
+                auditor.log_step(
+                    name="market_insights_observation",
+                    status="warning",
+                    detail=f"Shadow observation failed: {exc}",
+                )
+        auditor.finalize_run(status)
 
     # Config snapshot will be updated after adaptive logic
     initial_config_snapshot = {
@@ -649,6 +709,26 @@ def run_rebalance(args: argparse.Namespace) -> int:
             status="info",
             detail=f"Loaded {len(exchange_filters)} symbols for filters",
         )
+        try:
+            shadow_run = _build_shadow_run(
+                run_id=auditor.run_id or "unknown",
+                quote=args.quote,
+                spot_balances=balances,
+                earn_positions=simple_earn_positions,
+                prices=asset_prices,
+                target_weights=refined_targets,
+                drift_threshold=args.drift,
+                symbol_filters=exchange_filters,
+                snapshot_complete=simple_earn_snapshot_quality == "complete",
+                min_notional=args.min_notional,
+                min_notional_uplift_tolerance=getattr(
+                    args, "min_notional_uplift_tolerance", 0.0
+                ),
+                max_slippage=args.max_slippage,
+                advice_action=advice.action,
+            )
+        except Exception as exc:
+            shadow_capture_error = " ".join(str(exc).split())[:240]
         snapshot, dust_positions = filter_dust_positions(
             full_snapshot, exchange_filters, args.min_notional
         )
@@ -673,7 +753,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
             _persist_performance_snapshot(
                 auditor, {**before_performance, "phase": "after"}
             )
-            auditor.finalize_run("skipped")
+            finalize_with_shadow("skipped")
             logger.info("No rebalance required. Portfolio within drift limits.")
             return 0
         if advice.action == "maintain":
@@ -725,7 +805,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
             _persist_performance_snapshot(
                 auditor, {**before_performance, "phase": "after"}
             )
-            auditor.finalize_run("skipped")
+            finalize_with_shadow("skipped")
             logger.info(
                 "No tradable orders after applying filters and notional limits."
             )
@@ -769,7 +849,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
             _persist_performance_snapshot(
                 auditor, {**before_performance, "phase": "after"}
             )
-            auditor.finalize_run("noop")
+            finalize_with_shadow("noop")
             logger.info(
                 "No eligible trades after applying filters and notional limits."
             )
@@ -803,7 +883,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
             _persist_performance_snapshot(
                 auditor, {**before_performance, "phase": "after"}
             )
-            auditor.finalize_run("blocked_cost")
+            finalize_with_shadow("blocked_cost")
             logger.info("Cost gate blocked planned trades.")
             return 0
 
@@ -830,7 +910,7 @@ def run_rebalance(args: argparse.Namespace) -> int:
             _persist_performance_snapshot(
                 auditor, {**before_performance, "phase": "after"}
             )
-            auditor.finalize_run("skipped")
+            finalize_with_shadow("skipped")
             logger.info("All planned trades blocked by anti-churn cooldown.")
             return 0
 
@@ -925,13 +1005,13 @@ def run_rebalance(args: argparse.Namespace) -> int:
         _persist_performance_snapshot(auditor, after_performance)
         if pendings:
             _log_pendings(auditor, pendings)
-        auditor.finalize_run("completed")
+        finalize_with_shadow("completed")
     except Exception as exc:
         auditor.log_exception(error=str(exc))
         if pendings:
             _log_pendings(auditor, pendings)
         if run_started:
-            auditor.finalize_run("failed")
+            finalize_with_shadow("failed")
         logger.exception("Rebalance run failed")
         return 1
     finally:
@@ -980,6 +1060,63 @@ def _parse_bool(value: str) -> bool:
     if normalized in falsy:
         return False
     raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
+
+
+def _build_shadow_run(
+    *,
+    run_id: str,
+    quote: str,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+    prices: Mapping[str, float],
+    target_weights: Mapping[str, float],
+    drift_threshold: float,
+    symbol_filters: Mapping[str, SymbolFilters],
+    snapshot_complete: bool,
+    min_notional: float,
+    min_notional_uplift_tolerance: float,
+    max_slippage: float,
+    advice_action: str,
+) -> ShadowRun:
+    def aggregate(items: Sequence[tuple[str, float]]) -> dict[str, Decimal]:
+        result: dict[str, Decimal] = {}
+        for asset, quantity in items:
+            key = asset.strip().upper()
+            result[key] = result.get(key, Decimal(0)) + Decimal(str(quantity))
+        return result
+
+    quote_asset = quote.upper()
+    captured_prices = {
+        asset.upper(): Decimal(str(price)) for asset, price in prices.items()
+    }
+    captured_prices[quote_asset] = Decimal(1)
+    return ShadowRun(
+        session_id=f"shadow-{quote_asset.lower()}-v1",
+        run_id=run_id,
+        observed_at=datetime.now(timezone.utc),
+        quote_asset=quote_asset,
+        spot_balances=aggregate(
+            (balance.asset, balance.total) for balance in spot_balances
+        ),
+        earn_balances=aggregate(
+            (position.asset, position.total_amount) for position in earn_positions
+        ),
+        prices=captured_prices,
+        target_weights={
+            asset.upper(): Decimal(str(weight))
+            for asset, weight in target_weights.items()
+        },
+        drift_threshold=Decimal(str(drift_threshold)),
+        btc_vol30=None,
+        symbol_filters=dict(symbol_filters),
+        snapshot_complete=snapshot_complete,
+        min_notional=Decimal(str(min_notional)),
+        min_notional_uplift_tolerance=Decimal(
+            str(min_notional_uplift_tolerance)
+        ),
+        max_slippage=Decimal(str(max_slippage)),
+        advice_action=advice_action,
+    )
 
 
 def _balances_from_earn(positions: Sequence[SimpleEarnPosition]) -> list[Balance]:
