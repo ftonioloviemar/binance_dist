@@ -42,7 +42,7 @@ Each virtual policy maintains its own inventory across the session. Use the exis
 
 Default modeled costs are 0.10% fee plus 0.10% slippage per side; stress is 0.20% plus 0.20%. These are assumptions, not actual Binance costs. Present recorded execution commissions separately. Results must be labeled simulated and report net return, costs, turnover, drawdown, residual drift, executable/skipped trades, policy version, and data coverage. Incomplete required observations produce `incomplete` and null financial deltas; do not interpolate.
 
-Persist versioned, idempotent observations and scenario results in `state/market_insights.db`. Reporting is read-only and reads this store; it must not fetch market data or mutate a shadow session. The collector and simulator have an independent off switch. The existing monitor remains every three days, reports only material changes, and does not activate a strategy.
+Persist public market observations, indicators, and aggregate scenario results in `state/market_insights.db`. Persist only the minimum per-policy virtual inventory and session state needed for continuation in the separate local `state/shadow_portfolios.db`; these quantities are derived from real Spot/Earn holdings and remain sensitive. Do not persist raw source snapshots, credentials, or per-asset virtual balances in the market-insights store. Reporting is read-only, reads aggregate results from `market_insights.db`, and must not fetch market data or mutate a shadow session. The collector and simulator have an independent off switch. The existing monitor remains every three days, reports only material changes, and does not activate a strategy.
 
 ## Evaluation And Activation
 
