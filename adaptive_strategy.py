@@ -157,7 +157,7 @@ class AdaptiveStrategyManager:
         self,
         current_sentiment: MarketSentiment,
         btc_change_24h: float,
-        market_cap_change_24h: float,
+        market_cap_change_24h: Optional[float] = None,
         current_profile: Optional[str] = None,
     ) -> AdaptiveConfig:
         """Calcula a configuração adaptativa baseada no sentimento de mercado e indicadores."""
@@ -166,9 +166,17 @@ class AdaptiveStrategyManager:
         base_profile = sentiment_config["profile"]
 
         # Ajustar perfil baseado em tendências adicionais
-        if abs(btc_change_24h) > 10 or abs(market_cap_change_24h) > 5:
+        market_cap_has_extreme_move = (
+            market_cap_change_24h is not None
+            and abs(market_cap_change_24h) > 5
+        )
+        if abs(btc_change_24h) > 10 or market_cap_has_extreme_move:
             # Em movimentos extremos, ser mais conservador
-            if btc_change_24h < -10 or market_cap_change_24h < -5:
+            market_cap_has_severe_drop = (
+                market_cap_change_24h is not None
+                and market_cap_change_24h < -5
+            )
+            if btc_change_24h < -10 or market_cap_has_severe_drop:
                 if base_profile != RiskProfile.CONSERVATIVE:
                     logger.info(
                         f"Ajustando perfil de {base_profile.value} para {RiskProfile.CONSERVATIVE.value} devido a queda severa"

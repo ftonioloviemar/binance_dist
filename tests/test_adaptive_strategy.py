@@ -28,3 +28,29 @@ def test_extreme_fear_config_is_conservative_and_normalized() -> None:
             "ADA": 0.0083,
         }
     )
+
+
+def test_missing_market_cap_signal_keeps_sentiment_profile_and_btc_guard() -> None:
+    manager = get_adaptive_manager()
+    without_cap = manager.calculate_adaptive_config(
+        current_sentiment=MarketSentiment.GREED,
+        btc_change_24h=-2.0,
+        market_cap_change_24h=None,
+        current_profile="moderate",
+    )
+    neutral_cap = manager.calculate_adaptive_config(
+        current_sentiment=MarketSentiment.GREED,
+        btc_change_24h=-2.0,
+        market_cap_change_24h=0.0,
+        current_profile="moderate",
+    )
+    severe_btc_drop = manager.calculate_adaptive_config(
+        current_sentiment=MarketSentiment.GREED,
+        btc_change_24h=-11.0,
+        market_cap_change_24h=None,
+        current_profile="moderate",
+    )
+
+    assert without_cap.profile is neutral_cap.profile
+    assert without_cap.targets == pytest.approx(neutral_cap.targets)
+    assert severe_btc_drop.profile is RiskProfile.CONSERVATIVE

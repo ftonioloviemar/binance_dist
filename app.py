@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Sequence
 
@@ -50,6 +52,136 @@ from performance import build_performance_report, render_performance_report
 from cost_gate import evaluate_cost_gate
 
 logger = logging.getLogger("rebalance")
+
+
+@dataclass(frozen=True, slots=True)
+class AdaptiveSourceAssessment:
+    quality: str
+    reason: str | None
+    fear_greed_value: int | None = None
+    fear_greed_classification: str | None = None
+    btc_change_24h: float | None = None
+    market_cap_change_24h: float | None = None
+
+
+def _assess_adaptive_sources(
+    snapshot: MacroSnapshot, *, now: datetime | None = None
+) -> AdaptiveSourceAssessment:
+    current_time = now or datetime.now(timezone.utc)
+    if current_time.tzinfo is None or current_time.utcoffset() != timedelta(0):
+        return AdaptiveSourceAssessment("unavailable", "decision time is not UTC-aware")
+
+    sources = snapshot.sources if isinstance(snapshot.sources, dict) else {}
+    data = snapshot.data if isinstance(snapshot.data, dict) else {}
+    fear_meta = sources.get("fear_greed")
+    btc_meta = sources.get("btc_24h")
+    fear_data = data.get("fear_greed")
+    btc_data = data.get("btc_24h")
+
+    if not isinstance(fear_meta, dict) or fear_meta.get("status") != "fresh":
+        status = fear_meta.get("status", "unknown") if isinstance(fear_meta, dict) else "unknown"
+        return AdaptiveSourceAssessment(
+            "unavailable", f"fear_greed required source is not fresh (status={status})"
+        )
+    if not isinstance(btc_meta, dict) or btc_meta.get("status") != "fresh":
+        status = btc_meta.get("status", "unknown") if isinstance(btc_meta, dict) else "unknown"
+        return AdaptiveSourceAssessment(
+            "unavailable", f"btc_24h required source is not fresh (status={status})"
+        )
+    if not isinstance(fear_data, dict):
+        return AdaptiveSourceAssessment("unavailable", "fear_greed data is missing")
+    if not isinstance(btc_data, dict):
+        return AdaptiveSourceAssessment("unavailable", "btc_24h data is missing")
+
+    fear_value = fear_data.get("value")
+    fear_classification = fear_data.get("classification")
+    if type(fear_value) is not int or not 0 <= fear_value <= 100:
+        return AdaptiveSourceAssessment(
+            "unavailable", "fear_greed value is not an integer in 0..100"
+        )
+    if not isinstance(fear_classification, str) or not fear_classification.strip():
+        return AdaptiveSourceAssessment(
+            "unavailable", "fear_greed classification is missing"
+        )
+
+    fear_time = _parse_utc_timestamp(fear_meta.get("observed_at"))
+    if fear_time is None:
+        return AdaptiveSourceAssessment(
+            "unavailable", "fear_greed provider timestamp is missing or invalid"
+        )
+    fear_age = (current_time - fear_time).total_seconds()
+    if fear_age < 0 or fear_age > 36 * 60 * 60:
+        return AdaptiveSourceAssessment(
+            "unavailable", "fear_greed provider observation is outside 0..36h"
+        )
+
+    btc_price = _finite_market_number(btc_data.get("price"))
+    btc_change = _finite_market_number(btc_data.get("price_change_percent"))
+    btc_time = _parse_utc_timestamp(btc_meta.get("collected_at"))
+    if btc_price is None or btc_price <= 0 or btc_change is None:
+        return AdaptiveSourceAssessment(
+            "unavailable", "btc_24h price or change is missing/invalid"
+        )
+    if btc_time is None:
+        return AdaptiveSourceAssessment(
+            "unavailable", "btc_24h collection timestamp is missing or invalid"
+        )
+    btc_age = (current_time - btc_time).total_seconds()
+    if btc_age < 0 or btc_age > 15 * 60:
+        return AdaptiveSourceAssessment(
+            "unavailable", "btc_24h collection is outside 0..15m"
+        )
+
+    global_meta = sources.get("crypto_global")
+    global_data = data.get("crypto_global")
+    market_cap_change = None
+    degraded_reason = None
+    if (
+        isinstance(global_meta, dict)
+        and global_meta.get("status") == "fresh"
+        and global_meta.get("error") is None
+        and isinstance(global_data, dict)
+    ):
+        market_cap_change = _finite_market_number(
+            global_data.get("market_cap_change_24h")
+        )
+    if market_cap_change is None:
+        status = global_meta.get("status", "unknown") if isinstance(global_meta, dict) else "unknown"
+        degraded_reason = (
+            f"crypto_global optional signal unavailable (status={status})"
+        )
+
+    quality = "degraded" if degraded_reason else "full"
+    return AdaptiveSourceAssessment(
+        quality=quality,
+        reason=degraded_reason,
+        fear_greed_value=fear_value,
+        fear_greed_classification=fear_classification.strip(),
+        btc_change_24h=btc_change,
+        market_cap_change_24h=market_cap_change,
+    )
+
+
+def _parse_utc_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _finite_market_number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        number = float(value)
+    except OverflowError:
+        return None
+    return number if math.isfinite(number) else None
 
 
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
@@ -283,58 +415,61 @@ def run_rebalance(args: argparse.Namespace) -> int:
         adaptive_manager = get_adaptive_manager()
         adaptive_config = None
         adaptive_failure_detail: str | None = None
+        adaptive_fallback_reason: str | None = None
+        source_assessment: AdaptiveSourceAssessment | None = None
         current_sentiment: MarketSentiment | None = None
 
-        if args.adaptive and not macro_snapshot.errors:
-            try:
-                fg = macro_snapshot.data.get("fear_greed", {})
-                btc_data = macro_snapshot.data.get("btc_24h", {})
-                crypto_global = macro_snapshot.data.get("crypto_global", {})
-
-                fear_greed_value = fg.get("value", 50)
-                fear_greed_classification = fg.get("classification", "Neutral")
-                btc_change_24h = btc_data.get("price_change_percent", 0.0)
-                market_cap_change_24h = crypto_global.get("market_cap_change_24h", 0.0)
-
-                # Determinar sentimento de mercado
-                current_sentiment = adaptive_manager.get_market_sentiment(
-                    fear_greed_value, fear_greed_classification
-                )
-
-                # Calcular configuração adaptativa
-                adaptive_config = adaptive_manager.calculate_adaptive_config(
-                    current_sentiment=current_sentiment,
-                    btc_change_24h=btc_change_24h,
-                    market_cap_change_24h=market_cap_change_24h,
-                    current_profile=args.profile,
-                )
-
-                # Aplicar configuração adaptativa
-                if adaptive_config:
-                    # Sobrescrever parâmetros
-                    args.drift = adaptive_config.drift_threshold
-                    args.max_slippage = adaptive_config.max_slippage
-
-                    # Sobrescrever targets se não forem explícitos
-                    if not explicit_targets:
-                        target_weights = adaptive_config.targets
-
-                        # Log da decisão adaptativa
-                        summary = adaptive_manager.get_recommendation_summary(
-                            adaptive_config,
-                            current_sentiment,
-                            fear_greed_value,
-                            btc_change_24h,
-                        )
-                        logger.info(summary)
-
-                summary = fg.get("classification") or "ok"
-
-            except Exception as e:
+        if args.adaptive:
+            source_assessment = _assess_adaptive_sources(macro_snapshot)
+            if source_assessment.quality == "unavailable":
+                adaptive_fallback_reason = source_assessment.reason
                 logger.warning(
-                    f"Adaptive strategy failed: {e}. Using standard parameters."
+                    "Adaptive strategy not applied due to source quality: %s",
+                    adaptive_fallback_reason,
                 )
-                adaptive_failure_detail = f"Failed to apply adaptive strategy: {e}"
+            else:
+                try:
+                    fear_greed_value = source_assessment.fear_greed_value
+                    fear_greed_classification = (
+                        source_assessment.fear_greed_classification
+                    )
+                    btc_change_24h = source_assessment.btc_change_24h
+                    market_cap_change_24h = source_assessment.market_cap_change_24h
+
+                    assert fear_greed_value is not None
+                    assert fear_greed_classification is not None
+                    assert btc_change_24h is not None
+
+                    current_sentiment = adaptive_manager.get_market_sentiment(
+                        fear_greed_value, fear_greed_classification
+                    )
+                    adaptive_config = adaptive_manager.calculate_adaptive_config(
+                        current_sentiment=current_sentiment,
+                        btc_change_24h=btc_change_24h,
+                        market_cap_change_24h=market_cap_change_24h,
+                        current_profile=args.profile,
+                    )
+
+                    if adaptive_config:
+                        args.drift = adaptive_config.drift_threshold
+                        args.max_slippage = adaptive_config.max_slippage
+
+                    if adaptive_config and not explicit_targets:
+                        target_weights = adaptive_config.targets
+                        logger.info(
+                            adaptive_manager.get_recommendation_summary(
+                                adaptive_config,
+                                current_sentiment,
+                                fear_greed_value,
+                                btc_change_24h,
+                            )
+                        )
+
+                except Exception as e:
+                    logger.warning(
+                        f"Adaptive strategy failed: {e}. Using standard parameters."
+                    )
+                    adaptive_failure_detail = f"Failed to apply adaptive strategy: {e}"
 
         # Atualizar config snapshot com possíveis mudanças adaptativas
         effective_profile = (
@@ -370,7 +505,15 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 f"drift={adaptive_config.drift_threshold:.2%}, "
                 f"slippage={adaptive_config.max_slippage:.2%}, "
                 f"sentiment={current_sentiment.value}, "
+                f"source_quality={source_assessment.quality}, "
+                f"source_reason={source_assessment.reason or 'none'}, "
                 f"targets_changed={targets_changed}",
+            )
+        elif adaptive_fallback_reason:
+            auditor.log_step(
+                name="adaptive_strategy",
+                status="warning",
+                detail=f"Adaptive source-quality fallback: {adaptive_fallback_reason}",
             )
         elif adaptive_failure_detail:
             auditor.log_step(
@@ -380,21 +523,12 @@ def run_rebalance(args: argparse.Namespace) -> int:
             )
 
         # Comportamento padrão quando adaptive está desabilitado ou falha
-        if not args.adaptive or macro_snapshot.errors:
-            if macro_snapshot.errors:
-                auditor.log_step(
-                    name="macro_context",
-                    status="warning",
-                    detail="; ".join(macro_snapshot.errors[:3]),
-                )
-            else:
-                fg = macro_snapshot.data.get("fear_greed", {})
-                summary = fg.get("classification") or "ok"
-                auditor.log_step(
-                    name="macro_context",
-                    status="info",
-                    detail=f"Snapshot loaded ({summary})",
-                )
+        if macro_snapshot.errors:
+            auditor.log_step(
+                name="macro_context",
+                status="warning",
+                detail="; ".join(macro_snapshot.errors[:3]),
+            )
         else:
             fg = macro_snapshot.data.get("fear_greed", {})
             summary = fg.get("classification") or "ok"

@@ -6,7 +6,7 @@ This feature improves the reliability of existing macro inputs used by the adapt
 
 ## Live Adaptive Data Contract
 
-- These are the target rules for TASK-038; the current app still suppresses adaptive on any source error until that card is implemented.
+- Implemented by TASK-038: adaptive requires fresh, valid Fear & Greed and BTC source metadata; errors from optional CoinGecko do not by themselves suppress adaptive.
 - Fear & Greed is required, must be an integer from 0 through 100, and must include a valid provider timestamp no more than 36 hours old. Missing provider time is invalid; collection time must not disguise an old observation.
 - BTC 24-hour ticker is required, must have a positive price and finite change, and must have been collected no more than 15 minutes ago. Evaluate this freshness from local UTC collection time.
 - CoinGecko global market-cap data is optional. A fresh response can participate in the existing severe-market-drop condition. A cached or absent value is identified with age/quality and is not substituted with zero.
