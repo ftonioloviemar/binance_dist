@@ -19,7 +19,16 @@ Every source observation is exposed in additive `MacroSnapshot.sources`, keyed b
 
 Use public Binance daily klines for at most the six built-in risky assets BTC, ETH, SOL, BNB, AVAX, and ADA. If explicit targets include an unsupported asset, mark coverage incomplete for that run; never silently claim full-universe breadth. Cache observations in a separate market-insights SQLite database and collect only closed UTC daily candles. Request up to 92 candles per symbol so the metrics have history and gap-detection buffer. Collection is bounded by a 20-second overall deadline and must not hold up or fail the rebalance. Missing symbols or gaps invalidate only metrics requiring those observations and are reflected in coverage.
 
-For each sufficiently covered asset, calculate 1-, 7-, and 30-day close-to-close returns; sample standard deviation of the last 30 daily log returns; latest close relative to the 30-close simple moving average; and latest closed-day quote volume relative to the preceding 30 closed days' average. These require at least 31 consecutive closed daily candles. Breadth is the fraction of the six-asset universe whose latest close is above its 30-close average and is available only with complete universe coverage. These are descriptive indicators, not calibrated probabilities of profit.
+Calculate each metric from its own minimum contiguous UTC-daily window; a gap invalidates only windows that cross it:
+
+- `return_1d`: latest close / prior close - 1; 2 consecutive closed candles.
+- `return_7d`: latest close / close exactly 7 days earlier - 1; 8 consecutive closed candles.
+- `return_30d`: latest close / close exactly 30 days earlier - 1; 31 consecutive closed candles.
+- `vol30`: sample standard deviation (`ddof=1`) of the 30 latest daily log returns, `ln(close[i] / close[i-1])`; 31 consecutive closed candles. It is not annualized.
+- `distance_sma30`: latest close / mean of the latest 30 closes - 1; the latest candle is included; 30 consecutive closed candles.
+- `relative_quote_volume`: latest closed candle quote volume / mean quote volume of the preceding 30 closed candles; 31 consecutive closed candles and a positive denominator.
+
+Candles are anchored by UTC daily open time and must be exactly 24 hours apart. Insufficient samples, gaps in the metric's required window, invalid source/input, and undefined denominators produce a null value with explicit metric coverage; they never become zero. Keep source status separate from per-metric coverage so an `incomplete` source can still provide a valid shorter window. Breadth is the fraction of the six-asset universe whose latest close is above its 30-close average; it is available only when all six SMA30 values are valid for the same latest UTC candle session. These are descriptive indicators, not calibrated probabilities of profit, and remain excluded from live targets and the live AI prompt.
 
 Fear & Greed is a Bitcoin-focused contextual indicator. It is not an independent confirmation of broad altcoin sentiment. Attribute the source when rendering its classification.
 
