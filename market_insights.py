@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, localcontext
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, Sequence
 
 from market_candles import (
     DEFAULT_DB_PATH as CANDLE_DB_PATH,
@@ -133,7 +134,7 @@ def persist_market_indicators(
     payload = _snapshot_payload(snapshot)
     payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection, connection:
         _ensure_indicator_schema(connection)
         connection.execute(
             """
@@ -149,6 +150,103 @@ def persist_market_indicators(
             ),
         )
     return snapshot.input_fingerprint
+
+
+def persist_shadow_aggregates(
+    observations: Sequence[Mapping[str, object]],
+    *,
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> None:
+    """Persist aggregate shadow results without virtual per-asset inventory."""
+    if not observations:
+        return
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(path)) as connection, connection:
+        persist_shadow_aggregates_in_transaction(connection, observations)
+
+
+def persist_shadow_aggregates_in_transaction(
+    connection: sqlite3.Connection,
+    observations: Sequence[Mapping[str, object]],
+    *,
+    schema: str = "main",
+) -> None:
+    """Write aggregate rows into an existing SQLite transaction."""
+    _ensure_indicator_schema(connection, schema=schema)
+    table = _qualified_table(schema, "shadow_policy_observations")
+    connection.execute(
+        f"""CREATE TABLE IF NOT EXISTS {table} (
+            session_id TEXT NOT NULL, run_id TEXT NOT NULL, policy TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL, observed_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL, PRIMARY KEY (session_id, run_id, policy))"""
+    )
+    if not observations:
+        return
+    for observation in observations:
+        identity = (
+            str(observation["session_id"]),
+            str(observation["run_id"]),
+            str(observation["policy"]),
+        )
+        fingerprint = str(observation["input_fingerprint"])
+        existing = connection.execute(
+            f"SELECT input_fingerprint, payload_json FROM {table} "
+            "WHERE session_id=? AND run_id=? AND policy=?",
+            identity,
+        ).fetchone()
+        if existing is not None:
+            existing_payload = json.loads(existing[1])
+            if existing_payload.get("status") != "incomplete":
+                if existing[0] != fingerprint:
+                    raise ValueError("Conflicting completed shadow observation")
+                continue
+        payload = {
+            key: value for key, value in observation.items()
+            if key not in {"session_id", "run_id", "policy", "input_fingerprint", "observed_at"}
+        }
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        if existing is None:
+            connection.execute(
+                f"INSERT INTO {table} VALUES (?, ?, ?, ?, ?, ?)",
+                (*identity, fingerprint, str(observation["observed_at"]), encoded),
+            )
+        else:
+            connection.execute(
+                f"UPDATE {table} SET input_fingerprint=?, observed_at=?, payload_json=? "
+                "WHERE session_id=? AND run_id=? AND policy=?",
+                (fingerprint, str(observation["observed_at"]), encoded, *identity),
+            )
+
+
+def load_shadow_aggregates_in_transaction(
+    connection: sqlite3.Connection,
+    session_id: str,
+    run_id: str,
+    *,
+    schema: str = "main",
+) -> list[dict[str, object]]:
+    table = _qualified_table(schema, "shadow_policy_observations")
+    rows = connection.execute(
+        f"SELECT policy, input_fingerprint, observed_at, payload_json FROM {table} "
+        "WHERE session_id=? AND run_id=? ORDER BY policy",
+        (session_id, run_id),
+    ).fetchall()
+    return [
+        {
+            "policy": row[0],
+            "input_fingerprint": row[1],
+            "observed_at": row[2],
+            **json.loads(row[3]),
+        }
+        for row in rows
+    ]
+
+
+def _qualified_table(schema: str, table: str) -> str:
+    if schema not in {"main", "market_insights"}:
+        raise ValueError("Unsupported SQLite schema name")
+    return f'"{schema}"."{table}"'
 
 
 def _calculate_asset_metrics(
@@ -390,11 +488,15 @@ def _metric_payload(metric: MetricObservation) -> dict[str, object]:
     }
 
 
-def _ensure_indicator_schema(connection: sqlite3.Connection) -> None:
+def _ensure_indicator_schema(
+    connection: sqlite3.Connection, *, schema: str = "main"
+) -> None:
+    metadata_table = _qualified_table(schema, "market_indicator_metadata")
+    snapshots_table = _qualified_table(schema, "market_indicator_snapshots")
     tables = {
         row[0]
         for row in connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
+            f"SELECT name FROM {schema}.sqlite_master WHERE type='table'"
         )
     }
     metadata_exists = "market_indicator_metadata" in tables
@@ -405,7 +507,7 @@ def _ensure_indicator_schema(connection: sqlite3.Connection) -> None:
 
     if metadata_exists:
         version_row = connection.execute(
-            "SELECT schema_version FROM market_indicator_metadata "
+            f"SELECT schema_version FROM {metadata_table} "
             "WHERE component = 'market_indicators'"
         ).fetchone()
         if version_row is None or version_row[0] != SCHEMA_VERSION:
@@ -416,26 +518,22 @@ def _ensure_indicator_schema(connection: sqlite3.Connection) -> None:
         return
 
     connection.execute(
-        """
-        CREATE TABLE market_indicator_metadata (
+        f"""CREATE TABLE {metadata_table} (
             component TEXT PRIMARY KEY,
             schema_version INTEGER NOT NULL
-        )
-        """
+        )"""
     )
     connection.execute(
-        """
-        CREATE TABLE market_indicator_snapshots (
+        f"""CREATE TABLE {snapshots_table} (
             metrics_version TEXT NOT NULL,
             input_fingerprint TEXT NOT NULL,
             observed_at TEXT NOT NULL,
             payload_json TEXT NOT NULL,
             PRIMARY KEY (metrics_version, input_fingerprint)
-        )
-        """
+        )"""
     )
     connection.execute(
-        "INSERT INTO market_indicator_metadata (component, schema_version) "
+        f"INSERT INTO {metadata_table} (component, schema_version) "
         "VALUES ('market_indicators', ?)",
         (SCHEMA_VERSION,),
     )

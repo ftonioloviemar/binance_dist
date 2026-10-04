@@ -8,13 +8,18 @@ from decimal import Decimal, localcontext
 
 import pytest
 
+import market_insights
 from market_candles import (
     SUPPORTED_ASSETS,
     CandleCollection,
     CandleSource,
     MarketCandle,
 )
-from market_insights import calculate_market_indicators, persist_market_indicators
+from market_insights import (
+    calculate_market_indicators,
+    persist_market_indicators,
+    persist_shadow_aggregates,
+)
 
 
 AS_OF = datetime(2026, 10, 4, 0, 0, 1, tzinfo=UTC)
@@ -347,6 +352,52 @@ def test_persisted_observation_is_versioned_precise_and_idempotent(tmp_path) -> 
     saved = payload["assets"]["BTC"]["metrics"]["return_1d"]["value"]
     assert isinstance(saved, str)
     assert Decimal(saved) == _metric(snapshot, "return_1d").value
+
+
+def test_market_persistence_apis_close_connections_on_success_and_failure(tmp_path, monkeypatch) -> None:
+    original_connect = sqlite3.connect
+    opened = []
+
+    def capture_connection(*args, **kwargs):
+        connection = original_connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", capture_connection)
+    snapshot = calculate_market_indicators(_collection(count=31, by_asset={"BTC": _candles(31)}))
+    persist_market_indicators(snapshot, db_path=tmp_path / "indicators.db")
+    assert len(opened) == 1
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[-1].execute("SELECT 1")
+
+    observation = {
+        "session_id": "session-001",
+        "run_id": "run-001",
+        "policy": "hold",
+        "input_fingerprint": "fingerprint-001",
+        "observed_at": AS_OF.isoformat(),
+        "status": "seeded",
+    }
+    persist_shadow_aggregates([observation], db_path=tmp_path / "aggregates.db")
+    assert len(opened) == 2
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[-1].execute("SELECT 1")
+
+    with pytest.raises(KeyError):
+        persist_shadow_aggregates([{}], db_path=tmp_path / "failed.db")
+    assert len(opened) == 3
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[-1].execute("SELECT 1")
+
+    def fail_schema_setup(_connection):
+        raise sqlite3.OperationalError("injected schema failure")
+
+    monkeypatch.setattr(market_insights, "_ensure_indicator_schema", fail_schema_setup)
+    with pytest.raises(sqlite3.OperationalError, match="injected schema failure"):
+        persist_market_indicators(snapshot, db_path=tmp_path / "failed-indicators.db")
+    assert len(opened) == 4
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[-1].execute("SELECT 1")
 
 
 def test_fingerprint_ignores_collection_time_but_includes_source_quality(tmp_path) -> None:
