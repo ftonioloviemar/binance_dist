@@ -50,6 +50,11 @@ from portfolio import (
 from openrouter_model_curator import refresh_openrouter_models
 from performance_store import build_portfolio_snapshot, record_portfolio_snapshot
 from performance import build_performance_report, render_performance_report
+from market_insights_report import (
+    build_market_insights_report,
+    render_market_insights_json,
+    render_market_insights_text,
+)
 from cost_gate import evaluate_cost_gate
 from market_candles import SUPPORTED_ASSETS
 from shadow_observation import (
@@ -295,6 +300,16 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--json", action="store_true", help="Render machine-readable JSON"
     )
 
+    insights_parser = subcommands.add_parser(
+        "insights", help="Compare persisted shadow market scenarios"
+    )
+    insights_parser.add_argument(
+        "--days", type=int, default=30, help="Look back this many days (default 30)"
+    )
+    insights_parser.add_argument(
+        "--json", action="store_true", help="Render machine-readable JSON"
+    )
+
     normalized = _normalize_argv(argv)
     args = parser.parse_args(normalized)
     return args
@@ -309,6 +324,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_audit(args)
     if args.command == "performance":
         return run_performance(args)
+    if args.command == "insights":
+        return run_market_insights(args)
     return run_rebalance(args)
 
 
@@ -1051,6 +1068,24 @@ def run_performance(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_market_insights(args: argparse.Namespace) -> int:
+    if args.days <= 0:
+        logger.error("--days must be positive")
+        return 1
+    try:
+        report = build_market_insights_report(days=args.days)
+    except (OSError, ValueError) as exc:
+        logger.error("Could not build market insights report: %s", exc)
+        return 1
+    rendered = (
+        render_market_insights_json(report)
+        if args.json
+        else render_market_insights_text(report)
+    )
+    print(rendered)
+    return 0
+
+
 def _parse_bool(value: str) -> bool:
     truthy = {"1", "true", "yes", "on"}
     falsy = {"0", "false", "no", "off"}
@@ -1558,7 +1593,7 @@ def _print_run_detail(detail: Mapping[str, Any]) -> None:
 
 def _normalize_argv(argv: Sequence[str] | None) -> list[str]:
     tokens = list(argv or [])
-    if not tokens or tokens[0] not in {"rebalance", "audit", "performance"}:
+    if not tokens or tokens[0] not in {"rebalance", "audit", "performance", "insights"}:
         return ["rebalance", *tokens]
     return tokens
 
