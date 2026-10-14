@@ -8,11 +8,58 @@ from types import SimpleNamespace
 import pytest
 
 import app
-from binance_client import Balance, SymbolFilters
+from binance_client import BinanceAPIError, Balance, SimpleEarnPosition, SymbolFilters
 from config import EnvSettings
 from logging_audit import AuditLogger, load_run_detail
 from macro_context import MacroSnapshot
 from portfolio import AIAdvice
+
+
+def test_earn_redeem_audit_keeps_structured_error_without_request_secrets() -> None:
+    class FailingClient:
+        def redeem_simple_earn_flexible(self, **kwargs):
+            raise BinanceAPIError(
+                status_code=400,
+                code=-6009,
+                message="Request frequency too high",
+            )
+
+    class RecordingAuditor:
+        def __init__(self) -> None:
+            self.steps = []
+
+        def log_step(self, **step) -> None:
+            self.steps.append(step)
+
+    auditor = RecordingAuditor()
+    pendings: list[str] = []
+
+    app._redeem_simple_earn_positions(
+        client=FailingClient(),
+        positions=[
+            SimpleEarnPosition(
+                product_id="TEST001",
+                asset="TEST",
+                total_amount=1.0,
+                redeemable_amount=0.5,
+                can_fast_redeem=False,
+            )
+        ],
+        products_by_id={},
+        fast=False,
+        dry_run=False,
+        auditor=auditor,
+        pendings=pendings,
+    )
+
+    assert len(pendings) == 1
+    assert "HTTP 400" in pendings[0]
+    assert "-6009" in pendings[0]
+    assert "Request frequency too high" in pendings[0]
+    assert auditor.steps[0]["status"] == "failed"
+    assert auditor.steps[0]["detail"] == pendings[0]
+    for forbidden in ("signature", "API_KEY", "SECRET", "https://"):
+        assert forbidden not in pendings[0]
 
 
 @pytest.fixture(autouse=True)

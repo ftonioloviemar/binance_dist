@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
 import urllib.parse
 
@@ -129,6 +130,71 @@ class Balance:
 
 def create_signature(secret: str, query_string: str) -> str:
     return hmac.new(secret.encode(), query_string.encode(), hashlib.sha256).hexdigest()
+
+
+class BinanceAPIError(requests.HTTPError):
+    """HTTP error with safe Binance diagnostics and no request/response dump."""
+
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        code: int | None = None,
+        message: str | None = None,
+        sensitive_values: Sequence[str] = (),
+    ) -> None:
+        self.status_code = status_code
+        self.code = code
+        self.message = _sanitize_api_error_message(message, sensitive_values)
+        detail = f"Binance API HTTP {status_code}"
+        if code is not None:
+            detail += f" code={code}"
+        if self.message:
+            detail += f" message={self.message}"
+        super().__init__(detail)
+
+
+def _sanitize_api_error_message(
+    message: object, sensitive_values: Sequence[str] = ()
+) -> str | None:
+    if not isinstance(message, str):
+        return None
+    normalized = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", message).split())
+    normalized = re.sub(r"https?://\S+", "[URL]", normalized, flags=re.IGNORECASE)
+    normalized = re.sub(
+        r"\b(api[\s_-]?key|signature)\s*[:=]\s*[^\s,;]+",
+        r"\1=[REDACTED]",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    for value in sorted((value for value in sensitive_values if value), key=len, reverse=True):
+        normalized = re.sub(re.escape(value), "[REDACTED]", normalized, flags=re.IGNORECASE)
+    return normalized[:160] or None
+
+
+def _binance_error_code(payload: Mapping[str, Any] | None) -> int | None:
+    if payload is None:
+        return None
+    value = payload.get("code")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"-?\d{1,8}", value):
+        return int(value)
+    return None
+
+
+def _flatten_sensitive_values(value: Any) -> Iterable[str]:
+    if value is None:
+        return
+    yield str(value)
+    if isinstance(value, Mapping):
+        for nested_value in value.values():
+            yield from _flatten_sensitive_values(nested_value)
+    elif isinstance(value, (list, tuple, set)):
+        for nested_value in value:
+            yield from _flatten_sensitive_values(nested_value)
 
 
 class BinanceClient:
@@ -299,12 +365,14 @@ class BinanceClient:
                 data=prepared_params if method.upper() == "POST" else None,
                 timeout=self.timeout,
             )
-            if response.status_code == 400:
+            if response.status_code >= 400:
                 try:
                     payload = response.json()
                 except ValueError:
-                    payload = {}
-                if payload.get("code") == -1021:  # timestamp
+                    payload = None
+                error_payload = payload if isinstance(payload, Mapping) else None
+                error_code = _binance_error_code(error_payload)
+                if response.status_code == 400 and error_code == -1021:
                     logger.warning("Binance timestamp drift detected, syncing time")
                     self._sync_timestamp()
                     continue
@@ -313,7 +381,20 @@ class BinanceClient:
                 logger.warning("Rate limited by Binance, backing off for %s seconds", sleep_for)
                 time.sleep(sleep_for)
                 continue
-            response.raise_for_status()
+            if response.status_code >= 400:
+                message = error_payload.get("msg") if error_payload is not None else None
+                raise BinanceAPIError(
+                    status_code=response.status_code,
+                    code=error_code,
+                    message=message if isinstance(message, str) else None,
+                    sensitive_values=list(
+                        _flatten_sensitive_values(prepared_params)
+                    )
+                    + [
+                        self.api_secret,
+                        self.session.headers.get("X-MBX-APIKEY", ""),
+                    ],
+                )
             return response.json()
         raise RuntimeError("Exceeded maximum retries while calling Binance API")
 
@@ -333,6 +414,7 @@ def _format_decimal(value: float) -> str:
 
 __all__ = [
     "Balance",
+    "BinanceAPIError",
     "BinanceClient",
     "SimpleEarnPosition",
     "SimpleEarnProduct",
