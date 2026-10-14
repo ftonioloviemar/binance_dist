@@ -62,6 +62,12 @@ passed; full suite 223 passed. Commit TASK-045 before starting TASK-046.
 5. Have an independent specialist audit the diff and test evidence, then move
    this card to `05_done` and commit it.
 
+Status: complete; TASK-045 and TASK-046 independently audited and committed
+separately. Final full suite: 228 passed. The legacy argument/env setting are
+retained for compatibility but explicitly marked ineffective and omitted from
+the API payload. The historical 400 root cause remains unknown pending a
+future failure with captured structured diagnostics.
+
 ## Acceptance
 
 - A Binance API failure appears in `earn_redeem` audit with enough safe detail

@@ -58,7 +58,7 @@ uv run app.py performance --days 30 --json
 - Keys are never logged; failures are fatal if any mandatory variable is missing.
 
 ### Simple Earn automation
-- Enable via `SIMPLE_EARN_ENABLED=true`. Use `SIMPLE_EARN_FAST_REDEEM` (default true) to request fast redeems when Binance quotas allow, and `SIMPLE_EARN_EXCLUDE_ASSETS=BTC,BNB,...` to keep specific symbols on Spot.
+- Enable via `SIMPLE_EARN_ENABLED=true`. The legacy `SIMPLE_EARN_FAST_REDEEM` variable is retained for compatibility but has no effect: the current Flexible Redeem API does not expose a FAST/STANDARD selector. The audit reports whether it was explicitly configured. Use `SIMPLE_EARN_EXCLUDE_ASSETS=BTC,BNB,...` to keep specific symbols on Spot.
 - Flow per run:
   1. Fetch Spot balances + Simple Earn flexible positions/products, merge snapshots, and send the consolidated view to the AI. If it replies `"maintain"`, the bot stops immediately without touching funds.
   2. When the AI replies `"redistribute"`, redeem all eligible flexible positions (dry-run friendly), refresh Spot balances, and execute the standard rebalance plan.

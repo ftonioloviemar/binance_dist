@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from urllib.parse import urlencode
 
 import pytest
 
@@ -295,3 +296,53 @@ def test_exhausted_rate_limit_raises_structured_error(monkeypatch: pytest.Monkey
     assert "429" in str(captured.value)
     assert "-1003" in str(captured.value)
     assert len(session.requests) == 2
+
+
+def test_flexible_redeem_uses_documented_signed_request_fields() -> None:
+    session = FakeSession({"success": True})
+    client = BinanceClient(
+        api_key="key",
+        api_secret="secret",
+        base_url="https://example.invalid",
+        session=session,
+    )
+
+    client.redeem_simple_earn_flexible(product_id="TEST001", amount=1.25)
+
+    params = session.last_params
+    assert params is not None
+    assert session.requests[-1]["method"] == "POST"
+    assert session.requests[-1]["url"].endswith(
+        "/sapi/v1/simple-earn/flexible/redeem"
+    )
+    assert params["productId"] == "TEST001"
+    assert params["amount"] == "1.25"
+    assert params["destAccount"] == "SPOT"
+    assert "timestamp" in params
+    assert params["recvWindow"] == 5000
+    assert "signature" in params
+    assert "type" not in params
+    unsigned = {key: value for key, value in params.items() if key != "signature"}
+    assert params["signature"] == create_signature(
+        "secret", urlencode(unsigned, doseq=True)
+    )
+
+
+def test_legacy_fast_argument_is_accepted_but_not_sent(caplog: pytest.LogCaptureFixture) -> None:
+    session = FakeSession({"success": True})
+    client = BinanceClient(
+        api_key="key",
+        api_secret="secret",
+        base_url="https://example.invalid",
+        session=session,
+    )
+
+    with caplog.at_level("WARNING", logger="binance_client"):
+        client.redeem_simple_earn_flexible(
+            product_id="TEST001", amount=1.25, fast=True
+        )
+
+    assert session.last_params is not None
+    assert "type" not in session.last_params
+    assert "ignoring" in caplog.text.lower()
+    assert "FAST/STANDARD" in caplog.text

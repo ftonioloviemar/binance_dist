@@ -326,12 +326,17 @@ class BinanceClient:
         *,
         product_id: str,
         amount: float,
-        fast: bool,
+        fast: bool | None = None,
     ) -> Mapping[str, Any]:
+        if fast is not None:
+            logger.warning(
+                "Ignoring deprecated Simple Earn redeem fast argument; "
+                "the Flexible Redeem API has no FAST/STANDARD selector"
+            )
         params: Dict[str, Any] = {
             "productId": product_id,
             "amount": _format_decimal(amount),
-            "type": "FAST" if fast else "STANDARD",
+            "destAccount": "SPOT",
         }
         return self._request("POST", "/sapi/v1/simple-earn/flexible/redeem", params=params, signed=True)
 

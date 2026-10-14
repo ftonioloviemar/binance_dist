@@ -62,6 +62,7 @@ class EnvSettings:
     simple_earn_enabled: bool = False
     simple_earn_fast_redeem: bool = True
     simple_earn_exclude_assets: set[str] | None = None
+    simple_earn_fast_redeem_configured: bool = False
 
 
 @dataclass(slots=True)
@@ -106,7 +107,10 @@ def load_env_settings(recv_window: int) -> EnvSettings:
     model_fallback = openrouter_models[1] if len(openrouter_models) > 1 else None
     model_second_fallback = openrouter_models[2] if len(openrouter_models) > 2 else None
     simple_earn_enabled = _parse_bool(os.getenv("SIMPLE_EARN_ENABLED", "false"))
-    simple_earn_fast_redeem = _parse_bool(os.getenv("SIMPLE_EARN_FAST_REDEEM", "true"))
+    fast_redeem_raw = os.getenv("SIMPLE_EARN_FAST_REDEEM")
+    simple_earn_fast_redeem = _parse_bool(
+        fast_redeem_raw if fast_redeem_raw is not None else "true"
+    )
     exclude_assets = {
         token.strip().upper()
         for token in os.getenv("SIMPLE_EARN_EXCLUDE_ASSETS", "").split(",")
@@ -126,6 +130,7 @@ def load_env_settings(recv_window: int) -> EnvSettings:
         model_second_fallback=model_second_fallback,
         simple_earn_enabled=simple_earn_enabled,
         simple_earn_fast_redeem=simple_earn_fast_redeem,
+        simple_earn_fast_redeem_configured=fast_redeem_raw is not None,
         simple_earn_exclude_assets=exclude_assets,
     )
 

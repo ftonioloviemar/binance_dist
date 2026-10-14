@@ -117,3 +117,28 @@ def test_load_env_settings_prefers_openrouter_model_registry(
         "registry/first:free",
         "registry/second:free",
     )
+
+
+def test_legacy_fast_redeem_setting_default_is_not_marked_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_binance_env(monkeypatch)
+    monkeypatch.delenv("SIMPLE_EARN_FAST_REDEEM", raising=False)
+
+    settings = load_env_settings(5000)
+
+    assert settings.simple_earn_fast_redeem is True
+    assert settings.simple_earn_fast_redeem_configured is False
+
+
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_legacy_fast_redeem_setting_tracks_explicit_value(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    _set_required_binance_env(monkeypatch)
+    monkeypatch.setenv("SIMPLE_EARN_FAST_REDEEM", value)
+
+    settings = load_env_settings(5000)
+
+    assert settings.simple_earn_fast_redeem is (value == "true")
+    assert settings.simple_earn_fast_redeem_configured is True

@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-10-04.
+Last updated: 2026-10-14.
 
 ## Purpose
 
@@ -17,6 +17,13 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Commit rule: commit each completed card before starting the next one unless the user explicitly asks to hold commits.
 - Use `grill-with-docs` for fuzzy strategy/domain/workflow language; update `CONTEXT.md` for stable trading terms.
 - Catalogoantigo-adjacent skills installed in Codex home: `caveman`, `handoff`, `diagnose`, `improve-codebase-architecture`. Restart Codex for active skill list refresh.
+
+## Current Work
+
+- Goal: harden Simple Earn Flexible Redeem diagnostics and align request construction with the current Binance contract; no live exchange operations.
+- `TASK-045` completed and committed as `7c1e8a9`: HTTP API errors retain sanitized status/code/message; focused tests 41 passed and full suite 223 passed.
+- `TASK-046-align-simple-earn-flexible-redeem-contract` is complete and independently audited; request/config implementation and 228-test full suite passed. The historical HTTP 400 cause remains unknown because its response body was not captured.
+- Audits from seven local runs showed intermittent redeem/subscribe failures; historical response bodies were not captured, so exact prior HTTP 400 cause is unknown. Do not add a guessed delay/retry or run live operations to diagnose.
 
 ## Context Economy
 

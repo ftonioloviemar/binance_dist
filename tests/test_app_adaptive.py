@@ -45,8 +45,8 @@ def test_earn_redeem_audit_keeps_structured_error_without_request_secrets() -> N
                 can_fast_redeem=False,
             )
         ],
-        products_by_id={},
-        fast=False,
+        legacy_fast_redeem_configured=True,
+        legacy_fast_redeem_value=True,
         dry_run=False,
         auditor=auditor,
         pendings=pendings,
@@ -56,8 +56,13 @@ def test_earn_redeem_audit_keeps_structured_error_without_request_secrets() -> N
     assert "HTTP 400" in pendings[0]
     assert "-6009" in pendings[0]
     assert "Request frequency too high" in pendings[0]
-    assert auditor.steps[0]["status"] == "failed"
-    assert auditor.steps[0]["detail"] == pendings[0]
+    assert auditor.steps[0]["name"] == "earn_redeem_mode"
+    assert auditor.steps[0]["status"] == "info"
+    assert "configured=true" in auditor.steps[0]["detail"].lower()
+    assert "no effect" in auditor.steps[0]["detail"].lower()
+    assert "FAST/STANDARD" in auditor.steps[0]["detail"]
+    assert auditor.steps[1]["status"] == "failed"
+    assert auditor.steps[1]["detail"] == pendings[0]
     for forbidden in ("signature", "API_KEY", "SECRET", "https://"):
         assert forbidden not in pendings[0]
 

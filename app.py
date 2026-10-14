@@ -428,6 +428,8 @@ def run_rebalance(args: argparse.Namespace) -> int:
     initial_config_snapshot["simple_earn"] = {
         "enabled": env_settings.simple_earn_enabled,
         "fast_redeem": env_settings.simple_earn_fast_redeem,
+        "fast_redeem_configured": env_settings.simple_earn_fast_redeem_configured,
+        "fast_redeem_supported_by_api": False,
         "exclude": sorted(env_settings.simple_earn_exclude_assets or []),
     }
     pendings: list[str] = []
@@ -936,8 +938,10 @@ def run_rebalance(args: argparse.Namespace) -> int:
             _redeem_simple_earn_positions(
                 client=client,
                 positions=simple_earn_positions,
-                products_by_id=simple_earn_products,
-                fast=env_settings.simple_earn_fast_redeem,
+                legacy_fast_redeem_configured=(
+                    env_settings.simple_earn_fast_redeem_configured
+                ),
+                legacy_fast_redeem_value=env_settings.simple_earn_fast_redeem,
                 dry_run=args.dry_run,
                 auditor=auditor,
                 pendings=pendings,
@@ -1431,20 +1435,30 @@ def _redeem_simple_earn_positions(
     *,
     client: BinanceClient,
     positions: Sequence[SimpleEarnPosition],
-    products_by_id: Mapping[str, SimpleEarnProduct],
-    fast: bool,
+    legacy_fast_redeem_configured: bool,
+    legacy_fast_redeem_value: bool,
     dry_run: bool,
     auditor: AuditLogger,
     pendings: list[str],
 ) -> None:
+    configured_detail = (
+        f"configured={str(legacy_fast_redeem_value).lower()}"
+        if legacy_fast_redeem_configured
+        else "not explicitly configured"
+    )
+    auditor.log_step(
+        name="earn_redeem_mode",
+        status="info",
+        detail=(
+            "SIMPLE_EARN_FAST_REDEEM is legacy and has no effect on the current "
+            f"Flexible Redeem API ({configured_detail}); request omits type and "
+            "does not select FAST/STANDARD."
+        ),
+    )
     for position in positions:
         amount = position.redeemable_amount or position.total_amount
         if amount <= 0:
             continue
-        product = products_by_id.get(position.product_id)
-        allow_fast = fast and (
-            (product and product.can_fast_redeem) or position.can_fast_redeem
-        )
         detail = f"{position.asset} amount={amount:.8f} product={position.product_id}"
         if dry_run:
             auditor.log_step(name="earn_redeem", status="simulated", detail=detail)
@@ -1453,7 +1467,6 @@ def _redeem_simple_earn_positions(
             client.redeem_simple_earn_flexible(
                 product_id=position.product_id,
                 amount=amount,
-                fast=allow_fast,
             )
             auditor.log_step(name="earn_redeem", status="completed", detail=detail)
         except Exception as exc:
