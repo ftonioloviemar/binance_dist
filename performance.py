@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from typing import Any, Mapping
 
-from performance_store import load_execution_costs, load_portfolio_snapshots
+from performance_store import (
+    load_certified_external_flow_ledger,
+    load_execution_costs,
+    load_portfolio_snapshots,
+)
 
 
 def compare_snapshots(
@@ -95,9 +99,15 @@ def build_performance_report(
         "days": days,
         "generated_at": current.isoformat(),
         "horizons": {
-            "24h": _build_horizon(pairs, execution_costs, current - timedelta(hours=24), current),
-            "7d": _build_horizon(pairs, execution_costs, current - timedelta(days=7), current),
-            "30d": _build_horizon(pairs, execution_costs, current - timedelta(days=30), current),
+            "24h": _build_horizon(
+                db_path, pairs, execution_costs, current - timedelta(hours=24), current
+            ),
+            "7d": _build_horizon(
+                db_path, pairs, execution_costs, current - timedelta(days=7), current
+            ),
+            "30d": _build_horizon(
+                db_path, pairs, execution_costs, current - timedelta(days=30), current
+            ),
         },
     }
     return report
@@ -129,6 +139,24 @@ def render_performance_report(
                 f"hold={data['hold_change'] or 'unknown'} "
                 f"attribution={data['attribution_status']} runs={data['runs']}"
             )
+        pnl = data.get("net_pnl_quote")
+        dietz = data.get("modified_dietz_return_pct")
+        return_label = f"{dietz}% (approx., not annualized)" if dietz is not None else "unknown"
+        coverage_range = ""
+        if data.get("flow_coverage_start") and data.get("flow_coverage_end"):
+            coverage_range = (
+                f" range={data['flow_coverage_start']}..{data['flow_coverage_end']}"
+            )
+        source_hash = data.get("flow_source_sha256")
+        source_label = f" source_sha256={source_hash}" if source_hash else ""
+        lines.append(
+            "  flow-adjusted: "
+            f"net_pnl={pnl if pnl is not None else 'unknown'} "
+            f"Modified_Dietz={return_label} "
+            f"coverage={data.get('flow_coverage_status', 'unknown')}"
+            f"{coverage_range}{source_label} basis=user-certified "
+            "interpretation=flow-adjusted return, not strategy alpha"
+        )
         cost = data.get("execution_cost", {})
         lines.append(
             "  fees: "
@@ -155,6 +183,7 @@ def render_performance_report(
 
 
 def _build_horizon(
+    db_path: str | Path | None,
     pairs: Mapping[str, Mapping[str, Mapping[str, Any]]],
     execution_costs: list[Mapping[str, Any]],
     cutoff: datetime,
@@ -171,11 +200,14 @@ def _build_horizon(
         if cutoff <= before_time <= current and after_time <= current:
             eligible.append((before_time, after_time, before, after))
     if not eligible:
-        return {"status": "no_data", "runs": 0}
+        result = {"status": "no_data", "runs": 0}
+        result.update(_empty_flow_adjusted_metrics("no_data"))
+        return result
     eligible.sort(key=lambda item: item[0])
     first_before = eligible[0][2]
     last_after = max(eligible, key=lambda item: item[1])[3]
     result = compare_snapshots(first_before, last_after)
+    result.update(_flow_adjusted_metrics(db_path, first_before, last_after))
     costs = [
         cost for cost in execution_costs
         if _parse_timestamp(cost.get("timestamp")) >= eligible[0][0]
@@ -195,6 +227,172 @@ def _build_horizon(
         }
     )
     return result
+
+
+def _flow_adjusted_metrics(
+    db_path: str | Path | None,
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+) -> dict[str, Any]:
+    result = _empty_flow_adjusted_metrics("missing")
+    if before.get("data_quality") != "complete" or after.get("data_quality") != "complete":
+        result["flow_coverage_status"] = "incomplete_snapshots"
+        return result
+
+    before_quote = str(before.get("quote_asset", "")).upper()
+    after_quote = str(after.get("quote_asset", "")).upper()
+    if not before_quote or before_quote != after_quote:
+        result["flow_coverage_status"] = "quote_mismatch"
+        return result
+
+    ledger = load_certified_external_flow_ledger(db_path, before_quote)
+    if ledger is None:
+        return result
+    result.update(
+        {
+            "flow_coverage_start": ledger.get("coverage_start"),
+            "flow_coverage_end": ledger.get("coverage_end"),
+            "flow_certified_at": ledger.get("certified_at"),
+            "flow_source_sha256": ledger.get("source_sha256"),
+        }
+    )
+
+    try:
+        start = _parse_timestamp(before.get("timestamp"))
+        end = _parse_timestamp(after.get("timestamp"))
+        coverage_start = _parse_certified_timestamp(ledger.get("coverage_start"))
+        coverage_end = _parse_certified_timestamp(ledger.get("coverage_end"))
+        _parse_certified_timestamp(ledger.get("certified_at"))
+    except (TypeError, ValueError):
+        result["flow_coverage_status"] = "invalid_certificate"
+        return result
+    source_hash = ledger.get("source_sha256")
+    if (
+        not isinstance(source_hash, str)
+        or len(source_hash) != 64
+        or any(character not in "0123456789abcdef" for character in source_hash.lower())
+        or ledger.get("quote_asset", "").upper() != before_quote
+    ):
+        result["flow_coverage_status"] = "invalid_certificate"
+        return result
+    if start >= end or coverage_start > start or coverage_end < end:
+        result["flow_coverage_status"] = "insufficient"
+        return result
+
+    flows = ledger.get("flows")
+    if not isinstance(flows, list) or ledger.get("flow_count") != len(flows):
+        result["flow_coverage_status"] = "invalid_certificate"
+        return result
+
+    start_value = _finite_decimal(before.get("total_value"))
+    end_value = _finite_decimal(after.get("total_value"))
+    if start_value is None or end_value is None:
+        result["flow_coverage_status"] = "invalid_snapshots"
+        return result
+
+    duration_seconds = _elapsed_seconds(end - start)
+    eligible_flows: list[tuple[datetime, Decimal, str]] = []
+    for flow in flows:
+        if not isinstance(flow, Mapping):
+            result["flow_coverage_status"] = "invalid_certificate"
+            return result
+        value = _finite_decimal(flow.get("quote_value"))
+        direction = flow.get("direction")
+        try:
+            flow_time = _parse_certified_timestamp(flow.get("timestamp"))
+        except (TypeError, ValueError):
+            result["flow_coverage_status"] = "invalid_certificate"
+            return result
+        if (
+            value is None
+            or value <= 0
+            or direction not in {"in", "out"}
+            or not str(flow.get("asset", "")).strip()
+            or flow_time < coverage_start
+            or flow_time > coverage_end
+        ):
+            result["flow_coverage_status"] = "invalid_certificate"
+            return result
+        if flow_time <= start or flow_time > end:
+            continue
+        eligible_flows.append((flow_time, value, direction))
+
+    operands = [start_value, end_value, *(flow[1] for flow in eligible_flows)]
+    precision = _calculation_precision(operands)
+    with localcontext() as context:
+        context.prec = precision
+        external_net_flow = Decimal("0")
+        weighted_flows = Decimal("0")
+        for flow_time, value, direction in eligible_flows:
+            signed_value = value if direction == "in" else -value
+            external_net_flow += signed_value
+            weighted_flows += signed_value * (
+                _elapsed_seconds(end - flow_time) / duration_seconds
+            )
+
+        net_pnl = end_value - start_value - external_net_flow
+        denominator = start_value + weighted_flows
+        result.update(
+            {
+                "net_pnl_quote": _money(net_pnl),
+                "external_net_flow_quote": _money(external_net_flow),
+                "flow_coverage_status": "complete",
+            }
+        )
+        if denominator <= 0:
+            result["modified_dietz_return_reason"] = "nonpositive_denominator"
+            return result
+        return_pct = (net_pnl / denominator * Decimal("100")).quantize(
+            Decimal("0.000001")
+        )
+    result["modified_dietz_return_pct"] = format(return_pct, "f")
+    return result
+
+
+def _empty_flow_adjusted_metrics(status: str) -> dict[str, Any]:
+    return {
+        "net_pnl_quote": None,
+        "external_net_flow_quote": None,
+        "modified_dietz_return_pct": None,
+        "modified_dietz_return_reason": None,
+        "return_method": "modified_dietz_approximate",
+        "flow_coverage_status": status,
+        "flow_coverage_basis": "user_certified",
+        "flow_coverage_start": None,
+        "flow_coverage_end": None,
+        "flow_certified_at": None,
+        "flow_source_sha256": None,
+    }
+
+
+def _finite_decimal(value: Any) -> Decimal | None:
+    parsed = _decimal(value)
+    return parsed if parsed is not None and parsed.is_finite() else None
+
+
+def _elapsed_seconds(value: timedelta) -> Decimal:
+    return (
+        Decimal(value.days * 86400 + value.seconds)
+        + Decimal(value.microseconds) / Decimal("1000000")
+    )
+
+
+def _calculation_precision(values: list[Decimal]) -> int:
+    nonzero = [value for value in values if value]
+    if not nonzero:
+        return 50
+    max_adjusted = max(value.adjusted() for value in nonzero)
+    min_exponent = min(value.as_tuple().exponent for value in nonzero)
+    return max(50, max_adjusted - min_exponent + len(str(len(values))) + 16)
+
+
+def _parse_certified_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError("Certified timestamp must be text")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
+        raise ValueError("Certified timestamp must use UTC")
+    return parsed.astimezone(timezone.utc)
 
 
 def _aggregate_execution_costs(costs: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -295,7 +493,11 @@ def _decimal(value: Any) -> Decimal | None:
 
 
 def _money(value: Decimal) -> str:
-    return format(value.quantize(Decimal("0.01")), "f")
+    digits = len(value.as_tuple().digits)
+    exponent = value.as_tuple().exponent
+    with localcontext() as context:
+        context.prec = max(50, digits + max(0, exponent) + 2)
+        return format(value.quantize(Decimal("0.01")), "f")
 
 
 def _decimal_text(value: Decimal) -> str:

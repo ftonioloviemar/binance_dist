@@ -68,4 +68,28 @@ quote-currency net P&L and a timestamp-weighted Modified Dietz return.
 
 ## Completion evidence
 
-- Pending.
+- Performance horizons now report quote-currency `net_pnl_quote`, signed
+  `external_net_flow_quote`, non-annualized `modified_dietz_return_pct`, method,
+  coverage status/basis, covered dates, certification time, and source SHA-256.
+- Modified Dietz uses elapsed UTC seconds and weights flows in
+  `(start_timestamp, end_timestamp]`; each horizon independently requires a
+  complete same-quote snapshot interval covered by one user-certified ledger.
+- Missing/partial/invalid coverage, quote mismatch, incomplete snapshots, or
+  invalid values fail closed with adjusted metrics null. A nonpositive
+  denominator keeps valid net P&L but nulls the return with a reason. No-data
+  horizons still expose the new fields with null values and `no_data` status.
+- Existing raw `observed_change`, hold benchmark, and fee subtotals remain
+  separate; fees are not subtracted again. Text output labels the return
+  approximate/non-annualized, not strategy alpha, and coverage user-certified.
+- Decimal precision is expanded for intermediate calculations and currency
+  formatting; a regression test verifies `10^28` plus `0.01` retains the cent.
+- `CONTEXT.md` now defines certified external-flow coverage, quote-currency net
+  P&L, and Modified Dietz return with their evidence boundaries.
+- RED reproduced absent report fields and default-Decimal precision loss.
+  Focused command -> 39 passed; full `uv run pytest -q` -> 277 passed;
+  `git diff --check` passed apart from the expected Windows LF/CRLF notice.
+- Read-only CLI smoke `uv run python app.py performance --days 30 --json`
+  reported 24h/7d without certified coverage and 30d with incomplete snapshots;
+  adjusted metrics were null and `state/performance.db` SHA-256 was unchanged.
+- Independent final audit found no unresolved P1/P2. No exchange API, live
+  trade, redeem, subscribe, or database mutation was performed.

@@ -17,6 +17,9 @@ This glossary captures domain language for the Binance portfolio rebalancer. Wor
 - **Audit run**: Persistent JSON-lines record of run config, steps, orders, warnings, and final status, inspectable through `uv run app.py audit`.
 - **Effective execution cost**: Exchange-reported filled notional plus commissions converted to the quote asset only when a reference price is known; unknown conversions remain explicit.
 - **Attribution status**: Evidence state for performance interpretation: `complete`, `not_attributed` when external flows are unknown, or `incomplete` when required prices/data are missing.
+- **Certified external-flow coverage**: A user-certified CSV ledger for one quote asset and an inclusive UTC interval, identified by source SHA-256. Certification records the user's completeness assertion; it does not independently prove that every account movement was supplied.
+- **Quote-currency net P&L**: Ending portfolio value minus starting value and signed external net flows (`in` positive, `out` negative), reported only when endpoint snapshots are complete and one certified ledger covers the full interval. Fees already reflected in snapshots are not deducted again.
+- **Modified Dietz return**: Approximate, non-annualized flow-adjusted percentage using external flows weighted by the remaining elapsed UTC interval. It is reported only with complete snapshots, full certified flow coverage, and a positive denominator; it is not realized strategy alpha.
 
 ## Boundary Rules
 
