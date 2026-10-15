@@ -73,8 +73,8 @@ reference-price and reward-history contracts are defined.
 - Import requires explicit user confirmation that the CSV is complete for its
   declared interval. No live account/API access is assumed.
 - CSV quote values are supplied in the selected quote asset; do not infer
-  historical conversions. Coverage start is inclusive and coverage end is
-  exclusive; a report horizon must fit entirely inside one certified interval.
+  historical conversions. Coverage start and end are inclusive; a report
+  horizon must fit entirely inside one certified interval.
 - Re-importing the same quote asset and interval atomically replaces that
   interval's rows and certificate; invalid input leaves the prior data intact.
 - External inflow is positive and outflow negative for P&L; Spot/Earn movements
