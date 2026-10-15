@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 DEFAULT_DB_PATH = Path("state") / "performance.db"
 
 
@@ -190,6 +190,98 @@ def load_external_flows(
     return [dict(zip(fields, row)) for row in rows]
 
 
+def replace_certified_external_flow_ledger(
+    db_path: str | Path | None,
+    ledger: Mapping[str, Any],
+) -> None:
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    quote_asset = str(ledger["quote_asset"]).upper()
+    with sqlite3.connect(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        _ensure_schema(connection)
+        connection.execute(
+            "DELETE FROM certified_external_flows WHERE quote_asset = ?",
+            (quote_asset,),
+        )
+        connection.execute(
+            "DELETE FROM certified_flow_coverage WHERE quote_asset = ?",
+            (quote_asset,),
+        )
+        connection.execute(
+            """
+            INSERT INTO certified_flow_coverage(
+                quote_asset, coverage_start, coverage_end, certified_at,
+                source_sha256, flow_count
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                quote_asset,
+                str(ledger["coverage_start"]),
+                str(ledger["coverage_end"]),
+                str(ledger["certified_at"]),
+                str(ledger["source_sha256"]),
+                len(ledger.get("flows", [])),
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO certified_external_flows(
+                quote_asset, flow_id, timestamp, asset, quote_value, direction
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    quote_asset,
+                    str(flow["flow_id"]),
+                    str(flow["timestamp"]),
+                    str(flow["asset"]).upper(),
+                    str(flow["quote_value"]),
+                    str(flow["direction"]),
+                )
+                for flow in ledger.get("flows", [])
+            ],
+        )
+
+
+def load_certified_external_flow_ledger(
+    db_path: str | Path | None,
+    quote_asset: str,
+) -> dict[str, Any] | None:
+    path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
+    if not path.exists():
+        return None
+    readonly_uri = f"{path.resolve().as_uri()}?mode=ro"
+    with sqlite3.connect(readonly_uri, uri=True) as connection:
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        if "certified_flow_coverage" not in tables or "certified_external_flows" not in tables:
+            return None
+        connection.row_factory = sqlite3.Row
+        coverage = connection.execute(
+            "SELECT * FROM certified_flow_coverage WHERE quote_asset = ?",
+            (quote_asset.upper(),),
+        ).fetchone()
+        if coverage is None:
+            return None
+        flows = connection.execute(
+            """
+            SELECT flow_id, timestamp, asset, quote_value, direction
+            FROM certified_external_flows
+            WHERE quote_asset = ?
+            ORDER BY timestamp ASC, flow_id ASC
+            """,
+            (quote_asset.upper(),),
+        ).fetchall()
+    ledger = dict(coverage)
+    ledger["flows"] = [dict(flow) for flow in flows]
+    return ledger
+
+
 def record_execution_cost(
     db_path: str | Path | None,
     cost: Mapping[str, Any],
@@ -360,6 +452,31 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             direction TEXT NOT NULL,
             source TEXT NOT NULL,
             confidence TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS certified_flow_coverage (
+            quote_asset TEXT PRIMARY KEY,
+            coverage_start TEXT NOT NULL,
+            coverage_end TEXT NOT NULL,
+            certified_at TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            flow_count INTEGER NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS certified_external_flows (
+            quote_asset TEXT NOT NULL,
+            flow_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            asset TEXT NOT NULL,
+            quote_value TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            PRIMARY KEY (quote_asset, flow_id)
         )
         """
     )

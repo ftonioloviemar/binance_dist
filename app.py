@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import math
+import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -48,7 +49,12 @@ from portfolio import (
     validate_target_map,
 )
 from openrouter_model_curator import refresh_openrouter_models
-from performance_store import build_portfolio_snapshot, record_portfolio_snapshot
+from external_flow_import import import_external_flows_csv
+from performance_store import (
+    DEFAULT_DB_PATH,
+    build_portfolio_snapshot,
+    record_portfolio_snapshot,
+)
 from performance import build_performance_report, render_performance_report
 from market_insights_report import (
     build_market_insights_report,
@@ -300,6 +306,29 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--json", action="store_true", help="Render machine-readable JSON"
     )
 
+    flows_parser = subcommands.add_parser(
+        "flows", help="Import a user-certified external-flow ledger"
+    )
+    flows_commands = flows_parser.add_subparsers(dest="flows_command", required=True)
+    flow_import_parser = flows_commands.add_parser(
+        "import-csv", help="Import a local CSV and certify its complete UTC interval"
+    )
+    flow_import_parser.add_argument("--file", type=Path, required=True, help="CSV file path")
+    flow_import_parser.add_argument("--quote-asset", required=True, help="Quote asset used by CSV values")
+    flow_import_parser.add_argument("--coverage-start", required=True, help="Inclusive ISO-8601 UTC start")
+    flow_import_parser.add_argument("--coverage-end", required=True, help="Inclusive ISO-8601 UTC end")
+    flow_import_parser.add_argument(
+        "--confirm-complete",
+        action="store_true",
+        help="Confirm that the CSV includes every external flow in the declared interval",
+    )
+    flow_import_parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=DEFAULT_DB_PATH,
+        help="Performance database path (default: state/performance.db)",
+    )
+
     insights_parser = subcommands.add_parser(
         "insights", help="Compare persisted shadow market scenarios"
     )
@@ -324,6 +353,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return run_audit(args)
     if args.command == "performance":
         return run_performance(args)
+    if args.command == "flows":
+        return run_external_flow_import(args)
     if args.command == "insights":
         return run_market_insights(args)
     return run_rebalance(args)
@@ -1072,6 +1103,28 @@ def run_performance(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_external_flow_import(args: argparse.Namespace) -> int:
+    try:
+        result = import_external_flows_csv(
+            db_path=args.db_path,
+            csv_path=args.file,
+            quote_asset=args.quote_asset,
+            coverage_start=args.coverage_start,
+            coverage_end=args.coverage_end,
+            confirm_complete=args.confirm_complete,
+        )
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        logger.error("External-flow CSV import rejected: %s", exc)
+        return 1
+    print(
+        "Certified external-flow ledger imported: "
+        f"quote={result['quote_asset']} row_count={result['row_count']} "
+        f"coverage_start={result['coverage_start']} "
+        f"coverage_end={result['coverage_end']}"
+    )
+    return 0
+
+
 def run_market_insights(args: argparse.Namespace) -> int:
     if args.days <= 0:
         logger.error("--days must be positive")
@@ -1606,7 +1659,7 @@ def _print_run_detail(detail: Mapping[str, Any]) -> None:
 
 def _normalize_argv(argv: Sequence[str] | None) -> list[str]:
     tokens = list(argv or [])
-    if not tokens or tokens[0] not in {"rebalance", "audit", "performance", "insights"}:
+    if not tokens or tokens[0] not in {"rebalance", "audit", "performance", "flows", "insights"}:
         return ["rebalance", *tokens]
     return tokens
 

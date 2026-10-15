@@ -66,4 +66,20 @@ eligible for certified performance attribution.
 
 ## Completion evidence
 
-- Pending.
+- Added `flows import-csv` with explicit completeness acknowledgement, quote
+  asset, UTC interval, and isolated optional database path.
+- Certified flow data uses additive schema v4 tables; legacy unverified flows
+  and existing snapshots remain unchanged. A populated v3-shaped database test
+  confirms snapshot/metadata preservation and table creation during upgrade.
+- CSV validation rejects malformed syntax, duplicate/missing fields, invalid
+  timestamps/amounts/directions, duplicate IDs, and out-of-coverage rows before
+  mutation. Decimal values retain arbitrary precision without context rounding.
+- Re-import atomically replaces only the selected quote ledger. CLI output and
+  validation errors omit IDs, amounts, and raw CSV values.
+- RED/GREEN covered decimal rounding and malformed CSV handling; focused
+  `uv run pytest -q tests/test_external_flows.py` -> 23 passed.
+- Regression `uv run pytest -q` -> 270 passed; `git diff --check` passed.
+- CLI help smoke passed. CLI import tests use temporary CSV and SQLite paths;
+  no real database, Binance API, trading, or Earn operation was used.
+- Independent review found and verified fixes for decimal rounding and added
+  the populated-v3 migration coverage. Final review: no unresolved P1/P2.
