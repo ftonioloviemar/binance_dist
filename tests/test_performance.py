@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from performance import compare_snapshots
+from performance import _aggregate_execution_costs, compare_snapshots
 from performance_store import load_external_flows, record_external_flow
 
 
@@ -73,3 +73,81 @@ def test_external_flow_round_trip(tmp_path) -> None:
             "confidence": "confirmed",
         }
     ]
+
+
+def test_execution_cost_aggregate_explains_unknown_commissions_without_partial_total() -> None:
+    result = _aggregate_execution_costs(
+        [
+            {
+                "gross_notional": "100.00",
+                "commission_quote": "0.10",
+                "conversion_status": "complete",
+                "commission_by_asset": {"USDT": "0.10"},
+                "commission_conversion_details": {
+                    "USDT": {
+                        "commission": "0.10",
+                        "status": "quote_asset",
+                        "reference_price": "1",
+                        "quote_amount": "0.10",
+                        "reason": None,
+                    }
+                },
+            },
+            {
+                "gross_notional": "50.00",
+                "commission_quote": None,
+                "conversion_status": "partial",
+                "commission_by_asset": {"BNB": "0.00003", "USDT": "0.02"},
+                "commission_conversion_details": {
+                    "BNB": {
+                        "commission": "0.00003",
+                        "status": "unknown",
+                        "reference_price": None,
+                        "quote_amount": None,
+                        "reason": "reference_price_missing",
+                    },
+                    "USDT": {
+                        "commission": "0.02",
+                        "status": "quote_asset",
+                        "reference_price": "1",
+                        "quote_amount": "0.02",
+                        "reason": None,
+                    },
+                },
+            },
+            {
+                "gross_notional": "25.00",
+                "commission_quote": None,
+                "conversion_status": "incomplete",
+                "commission_by_asset": {},
+                "commission_conversion_details": {},
+                "commission_data_issues": {"commission_amount_missing": 1},
+            },
+            {
+                "gross_notional": "20.00",
+                "commission_quote": None,
+                "conversion_status": "incomplete",
+                "commission_by_asset": {"BNB": None},
+                "commission_conversion_details": {
+                    "BNB": {
+                        "commission": None,
+                        "known_commission_subtotal": "0.00001",
+                        "known_commission_quote_subtotal": "0.00600000",
+                        "status": "incomplete",
+                        "reason": "commission_amount_missing",
+                    }
+                },
+                "commission_data_issues": {"commission_amount_missing": 1},
+            },
+        ]
+    )
+
+    assert result["orders"] == 4
+    assert result["conversion_complete_orders"] == 1
+    assert result["conversion_unknown_orders"] == 3
+    assert result["commission_quote"] is None
+    assert result["converted_commission_quote_subtotal"] == "0.126"
+    assert result["unconverted_commission_by_asset"] == {"BNB": "0.00003"}
+    assert result["unknown_orders_without_asset_breakdown"] == 1
+    assert result["unknown_conversion_reasons"] == {"reference_price_missing": 1}
+    assert result["commission_data_issues"] == {"commission_amount_missing": 2}

@@ -119,16 +119,38 @@ def render_performance_report(
             lines.append(
                 f"{horizon}: incomplete data; observed=unknown hold=unknown"
             )
-            continue
-        observed_change = data.get("observed_change")
-        observed_label = (
-            observed_change if observed_change is not None else "unknown"
-        )
+        else:
+            observed_change = data.get("observed_change")
+            observed_label = (
+                observed_change if observed_change is not None else "unknown"
+            )
+            lines.append(
+                f"{horizon}: observed={observed_label} "
+                f"hold={data['hold_change'] or 'unknown'} "
+                f"attribution={data['attribution_status']} runs={data['runs']}"
+            )
+        cost = data.get("execution_cost", {})
         lines.append(
-            f"{horizon}: observed={observed_label} "
-            f"hold={data['hold_change'] or 'unknown'} "
-            f"attribution={data['attribution_status']} runs={data['runs']}"
+            "  fees: "
+            f"converted_quote_subtotal={cost.get('converted_commission_quote_subtotal', '0.00')} "
+            f"converted_orders={cost.get('conversion_complete_orders', 0)} "
+            f"unknown_orders={cost.get('conversion_unknown_orders', 0)} "
+            f"unknown_without_asset_detail={cost.get('unknown_orders_without_asset_breakdown', 0)}"
         )
+        unknown_by_asset = cost.get("unconverted_commission_by_asset", {})
+        if unknown_by_asset:
+            details = ", ".join(
+                f"{asset}={amount}"
+                for asset, amount in sorted(unknown_by_asset.items())
+            )
+            lines.append(f"  unconverted commissions by asset: {details}")
+        data_issues = cost.get("commission_data_issues", {})
+        if data_issues:
+            details = ", ".join(
+                f"{reason}={count}"
+                for reason, count in sorted(data_issues.items())
+            )
+            lines.append(f"  incomplete fill commission data: {details}")
     return "\n".join(lines)
 
 
@@ -182,11 +204,70 @@ def _aggregate_execution_costs(costs: list[Mapping[str, Any]]) -> dict[str, Any]
         Decimal("0"),
     )
     unknown = sum(1 for cost in costs if cost.get("conversion_status") != "complete")
+    complete = len(costs) - unknown
+    unknown_by_asset: dict[str, Decimal] = {}
+    unknown_reasons: dict[str, int] = {}
+    commission_data_issues: dict[str, int] = {}
+    unknown_without_breakdown = 0
+    converted_subtotal = Decimal("0")
+    for cost in costs:
+        details = cost.get("commission_conversion_details") or {}
+        if isinstance(details, Mapping) and details:
+            for detail in details.values():
+                if isinstance(detail, Mapping) and detail.get("status") in {
+                    "converted", "quote_asset"
+                }:
+                    converted_subtotal += _decimal(detail.get("quote_amount")) or Decimal("0")
+                elif isinstance(detail, Mapping) and detail.get("status") == "incomplete":
+                    converted_subtotal += (
+                        _decimal(detail.get("known_commission_quote_subtotal"))
+                        or Decimal("0")
+                    )
+        elif cost.get("conversion_status") == "complete":
+            converted_subtotal += _decimal(cost.get("commission_quote")) or Decimal("0")
+        if cost.get("conversion_status") == "complete":
+            continue
+        for reason, count in (cost.get("commission_data_issues") or {}).items():
+            try:
+                issue_count = int(count)
+            except (TypeError, ValueError):
+                issue_count = 0
+            if issue_count > 0:
+                key = str(reason)
+                commission_data_issues[key] = commission_data_issues.get(key, 0) + issue_count
+        if not isinstance(details, Mapping) or not details:
+            unknown_without_breakdown += 1
+            continue
+        has_unknown_detail = False
+        for asset, detail in details.items():
+            if not isinstance(detail, Mapping) or detail.get("status") not in {
+                "unknown", "incomplete"
+            }:
+                continue
+            has_unknown_detail = True
+            amount = _decimal(detail.get("commission"))
+            if amount is not None:
+                key = str(asset).upper()
+                unknown_by_asset[key] = unknown_by_asset.get(key, Decimal("0")) + amount
+            if detail.get("status") == "unknown":
+                reason = str(detail.get("reason") or "unknown_reason")
+                unknown_reasons[reason] = unknown_reasons.get(reason, 0) + 1
+        if not has_unknown_detail:
+            unknown_without_breakdown += 1
     return {
         "orders": len(costs),
         "gross_notional": _money(gross),
         "commission_quote": _money(commission) if unknown == 0 else None,
+        "converted_commission_quote_subtotal": _decimal_text(converted_subtotal),
         "conversion_unknown_orders": unknown,
+        "conversion_complete_orders": complete,
+        "unknown_orders_without_asset_breakdown": unknown_without_breakdown,
+        "unconverted_commission_by_asset": {
+            asset: _decimal_text(amount)
+            for asset, amount in sorted(unknown_by_asset.items())
+        },
+        "unknown_conversion_reasons": dict(sorted(unknown_reasons.items())),
+        "commission_data_issues": dict(sorted(commission_data_issues.items())),
         "commission_bps": (
             format((commission / gross * Decimal("10000")).quantize(Decimal("0.000001")), "f")
             if gross > 0 and unknown == 0
@@ -215,3 +296,7 @@ def _decimal(value: Any) -> Decimal | None:
 
 def _money(value: Decimal) -> str:
     return format(value.quantize(Decimal("0.01")), "f")
+
+
+def _decimal_text(value: Decimal) -> str:
+    return format(value.normalize(), "f")

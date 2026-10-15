@@ -87,6 +87,32 @@ def test_incomplete_snapshots_do_not_report_observed_or_hold_change(tmp_path) ->
     )
 
 
+def test_text_report_keeps_fee_gaps_visible_for_incomplete_horizon() -> None:
+    report = {
+        "days": 30,
+        "horizons": {
+            "30d": {
+                "status": "incomplete",
+                "execution_cost": {
+                    "conversion_complete_orders": 4,
+                    "conversion_unknown_orders": 2,
+                    "unknown_orders_without_asset_breakdown": 1,
+                    "converted_commission_quote_subtotal": "3.20",
+                    "unconverted_commission_by_asset": {"BNB": "0.00003"},
+                    "commission_data_issues": {"commission_amount_missing": 1},
+                },
+            }
+        },
+    }
+
+    rendered = render_performance_report(report)
+
+    assert "incomplete data; observed=unknown hold=unknown" in rendered
+    assert "converted_quote_subtotal=3.20 converted_orders=4 unknown_orders=2 unknown_without_asset_detail=1" in rendered
+    assert "unconverted commissions by asset: BNB=0.00003" in rendered
+    assert "incomplete fill commission data: commission_amount_missing=1" in rendered
+
+
 def test_performance_command_is_not_normalized_to_rebalance() -> None:
     args = parse_args(["performance", "--days", "30", "--json"])
     assert args.command == "performance"

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Mapping
+
+import requests
 
 from execution import execute_trades
 from logging_audit import AuditLogger, load_run_detail
@@ -93,3 +96,35 @@ def test_execute_trades_logs_converted_effective_cost(tmp_path: Path) -> None:
     assert "commission_quote=0.01800000" in detail["orders"][0]["detail"]
     assert "commission_bps=0.180000" in detail["orders"][0]["detail"]
     assert "conversion=complete" in detail["orders"][0]["detail"]
+
+
+def test_execute_trades_does_not_log_raw_http_error_body(tmp_path: Path) -> None:
+    response = requests.Response()
+    response.status_code = 400
+    response._content = b"sensitive-exchange-response-body"
+
+    class RejectedOrderClient:
+        def place_order(self, **_: object) -> Mapping[str, Any]:
+            raise requests.HTTPError("sensitive-exception-text", response=response)
+
+    auditor = AuditLogger(logs_dir=tmp_path)
+    run_id = auditor.start_run(profile="moderate", dry_run=False, config_snapshot={})
+    pending: list[str] = []
+
+    execute_trades(
+        trades=[_trade()],
+        client=RejectedOrderClient(),  # type: ignore[arg-type]
+        auditor=auditor,
+        dry_run=False,
+        available_balances={"BTC": 0.0, "USDT": 100.0},
+        pendings=pending,
+    )
+
+    detail = load_run_detail(run_id, logs_dir=tmp_path)
+
+    assert detail is not None
+    serialized = json.dumps(detail)
+    assert "HTTP 400" in serialized
+    assert "sensitive-exchange-response-body" not in serialized
+    assert "sensitive-exception-text" not in serialized
+    assert all("sensitive-" not in item for item in pending)

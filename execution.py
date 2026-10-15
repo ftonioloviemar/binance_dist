@@ -76,15 +76,29 @@ def execute_trades(
                     client_order_id=client_order_id,
                 )
             except requests.HTTPError as exc:
-                body = exc.response.text if exc.response is not None else str(exc)
-                auditor.log_exception(error=f"Order {trade.symbol} failed: {body}")
-                pending_log.append(f"{trade.symbol}: exchange rejected order ({body})")
-                auditor.log_step(name=f"plan_{trade.symbol}", status="failed", detail=body)
+                status_code = exc.response.status_code if exc.response is not None else None
+                error_summary = (
+                    f"HTTP {status_code}" if status_code is not None else "HTTP error"
+                )
+                auditor.log_exception(
+                    error=f"Order {trade.symbol} failed ({error_summary})"
+                )
+                pending_log.append(
+                    f"{trade.symbol}: exchange rejected order ({error_summary})"
+                )
+                auditor.log_step(
+                    name=f"plan_{trade.symbol}", status="failed", detail=error_summary
+                )
                 continue
             except Exception as exc:
-                auditor.log_exception(error=f"Order {trade.symbol} failed: {exc}")
-                pending_log.append(f"{trade.symbol}: {exc}")
-                auditor.log_step(name=f"plan_{trade.symbol}", status="failed", detail=str(exc))
+                error_summary = type(exc).__name__
+                auditor.log_exception(
+                    error=f"Order {trade.symbol} failed ({error_summary})"
+                )
+                pending_log.append(f"{trade.symbol}: order failed ({error_summary})")
+                auditor.log_step(
+                    name=f"plan_{trade.symbol}", status="failed", detail=error_summary
+                )
                 continue
             report = ExecutionResult(
                 instruction=trade,
@@ -156,13 +170,18 @@ def _format_order_detail(
     client_order_id = str(response.get("clientOrderId", fallback_client_order_id))
     commissions = _summarize_commissions(response)
     detail = f"clientOrderId={client_order_id}"
-    if commissions:
-        detail += f"; commission={commissions}"
     cost = summarize_execution_cost(
         response,
         quote_asset=quote_asset,
         reference_prices=reference_prices,
     )
+    if commissions:
+        label = (
+            "commission_known_subtotal"
+            if cost["commission_data_issues"]
+            else "commission"
+        )
+        detail += f"; {label}={commissions}"
     if cost["gross_notional"] != "0.00":
         detail += (
             f"; gross_notional={cost['gross_notional']}"
@@ -171,6 +190,13 @@ def _format_order_detail(
             f"; commission_bps={cost['commission_bps'] or 'unknown'}"
             f"; conversion={cost['conversion_status']}"
         )
+    data_issues = cost.get("commission_data_issues", {})
+    if data_issues:
+        issue_summary = ",".join(
+            f"{reason}:{count}"
+            for reason, count in sorted(data_issues.items())
+        )
+        detail += f"; commission_data_incomplete={issue_summary}"
     return detail
 
 
@@ -199,24 +225,119 @@ def summarize_execution_cost(
     gross_notional = _decimal(response.get("cummulativeQuoteQty")) or fill_notional
 
     commission_totals: dict[str, Decimal] = {}
+    asset_commission_issues: dict[str, set[str]] = {}
+    commission_data_issues: dict[str, int] = {}
     for fill in fill_rows:
         asset = str(fill.get("commissionAsset", "")).upper()
-        commission = _decimal(fill.get("commission"))
-        if asset and commission is not None:
+        if not asset:
+            issue = "commission_asset_missing"
+            commission_data_issues[issue] = commission_data_issues.get(issue, 0) + 1
+            continue
+        raw_commission = fill.get("commission")
+        commission = _decimal(raw_commission)
+        if raw_commission in (None, ""):
+            issue = "commission_amount_missing"
+        elif commission is None:
+            issue = "commission_amount_invalid"
+        elif commission < 0:
+            issue = "commission_amount_negative"
+        else:
             commission_totals[asset] = commission_totals.get(asset, Decimal("0")) + commission
+            continue
+        commission_data_issues[issue] = commission_data_issues.get(issue, 0) + 1
+        asset_commission_issues.setdefault(asset, set()).add(issue)
 
     converted_commission = Decimal("0")
     unknown_assets: list[str] = []
-    normalized_prices = {asset.upper(): _decimal(value) for asset, value in reference_prices.items()}
-    for asset, commission in commission_totals.items():
+    raw_reference_prices = {
+        str(asset).upper(): value for asset, value in reference_prices.items()
+    }
+    normalized_prices = {
+        asset: _decimal(value) for asset, value in raw_reference_prices.items()
+    }
+    conversion_details: dict[str, dict[str, str | None]] = {}
+    commission_assets = sorted(set(commission_totals) | set(asset_commission_issues))
+    for asset in commission_assets:
+        commission = commission_totals.get(asset, Decimal("0"))
+        if asset in asset_commission_issues:
+            unknown_assets.append(asset)
+            issues = sorted(asset_commission_issues[asset])
+            subtotal_price = Decimal("1") if asset == quote else normalized_prices.get(asset)
+            known_quote_subtotal = (
+                _money8(commission * subtotal_price)
+                if asset in commission_totals
+                and subtotal_price is not None
+                and subtotal_price > 0
+                else None
+            )
+            conversion_details[asset] = {
+                "commission": None,
+                "known_commission_subtotal": (
+                    _decimal_text(commission) if asset in commission_totals else None
+                ),
+                "known_commission_quote_subtotal": known_quote_subtotal,
+                "status": "incomplete",
+                "source": (
+                    "quote_asset" if asset == quote
+                    else "supplied_reference_price" if known_quote_subtotal is not None
+                    else "fill_response"
+                ),
+                "reference_price": (
+                    "1" if asset == quote
+                    else _decimal_text(subtotal_price)
+                    if known_quote_subtotal is not None
+                    else None
+                ),
+                "quote_amount": None,
+                "reason": issues[0] if len(issues) == 1 else "commission_data_incomplete",
+            }
+            continue
         if asset == quote:
             converted_commission += commission
+            conversion_details[asset] = {
+                "commission": _decimal_text(commission),
+                "status": "quote_asset",
+                "source": "quote_asset",
+                "reference_price": "1",
+                "quote_amount": _money8(commission),
+                "reason": None,
+            }
             continue
         price = normalized_prices.get(asset)
+        if asset not in raw_reference_prices:
+            unknown_assets.append(asset)
+            conversion_details[asset] = {
+                "commission": _decimal_text(commission),
+                "status": "unknown",
+                "source": "reference_price_lookup",
+                "reference_price": None,
+                "quote_amount": None,
+                "reason": "reference_price_missing",
+            }
+            continue
         if price is None or price <= 0:
             unknown_assets.append(asset)
+            conversion_details[asset] = {
+                "commission": _decimal_text(commission),
+                "status": "unknown",
+                "source": "reference_price_lookup",
+                "reference_price": None,
+                "quote_amount": None,
+                "reason": (
+                    "reference_price_invalid" if price is None
+                    else "reference_price_nonpositive"
+                ),
+            }
             continue
         converted_commission += commission * price
+        conversion_details[asset] = {
+            "commission": _decimal_text(commission),
+            "status": "converted",
+            "source": "supplied_reference_price",
+            "reference_price": _decimal_text(price),
+            "quote_amount": _money8(commission * price),
+            "reason": None,
+        }
 
     if not commission_totals:
         conversion_status = "not_available"
@@ -226,10 +347,12 @@ def summarize_execution_cost(
         conversion_status = "unknown"
     else:
         conversion_status = "complete"
+    if commission_data_issues:
+        conversion_status = "incomplete"
 
     commission_quote = (
         _money8(converted_commission)
-        if commission_totals and not unknown_assets
+        if commission_totals and not unknown_assets and not commission_data_issues
         else None
     )
     commission_bps = (
@@ -245,12 +368,20 @@ def summarize_execution_cost(
         "gross_notional": _money(gross_notional),
         "average_fill_price": _price8(gross_notional / executed_quantity) if executed_quantity > 0 else None,
         "commission_by_asset": {
-            asset: _decimal_text(amount) for asset, amount in sorted(commission_totals.items())
+            asset: (
+                None if asset in asset_commission_issues else _decimal_text(commission_totals[asset])
+            )
+            for asset in commission_assets
         },
         "commission_quote": commission_quote,
         "commission_bps": commission_bps,
         "conversion_status": conversion_status,
         "unknown_conversion_assets": sorted(unknown_assets),
+        "commission_data_issues": dict(sorted(commission_data_issues.items())),
+        "commission_conversion_details": {
+            asset: conversion_details[asset]
+            for asset in sorted(conversion_details)
+        },
     }
 
 
@@ -258,7 +389,8 @@ def _decimal(value: Any) -> Decimal | None:
     if value in (None, "") or isinstance(value, bool):
         return None
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
     except (InvalidOperation, ValueError):
         return None
 
@@ -298,11 +430,8 @@ def _summarize_commissions(response: Mapping[str, Any]) -> str:
             continue
         asset = str(fill.get("commissionAsset", "")).upper()
         raw_commission = fill.get("commission")
-        if not asset or raw_commission in {None, ""}:
-            continue
-        try:
-            commission = Decimal(str(raw_commission))
-        except InvalidOperation:
+        commission = _decimal(raw_commission)
+        if not asset or commission is None or commission < 0:
             continue
         totals[asset] = totals.get(asset, Decimal("0")) + commission
 

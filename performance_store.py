@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_DB_PATH = Path("state") / "performance.db"
 
 
@@ -202,8 +202,10 @@ def record_execution_cost(
             """
             INSERT INTO execution_costs(
                 run_id, order_id, timestamp, symbol, side, gross_notional,
-                commission_quote, commission_bps, conversion_status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                commission_quote, commission_bps, conversion_status,
+                commission_by_asset_json, commission_conversion_details_json,
+                commission_data_issues_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id, order_id) DO UPDATE SET
                 timestamp=excluded.timestamp,
                 symbol=excluded.symbol,
@@ -211,7 +213,10 @@ def record_execution_cost(
                 gross_notional=excluded.gross_notional,
                 commission_quote=excluded.commission_quote,
                 commission_bps=excluded.commission_bps,
-                conversion_status=excluded.conversion_status
+                conversion_status=excluded.conversion_status,
+                commission_by_asset_json=excluded.commission_by_asset_json,
+                commission_conversion_details_json=excluded.commission_conversion_details_json,
+                commission_data_issues_json=excluded.commission_data_issues_json
             """,
             (
                 str(cost["run_id"]),
@@ -223,6 +228,9 @@ def record_execution_cost(
                 cost.get("commission_quote"),
                 cost.get("commission_bps"),
                 str(cost.get("conversion_status", "unknown")),
+                _json(cost.get("commission_by_asset", {})),
+                _json(cost.get("commission_conversion_details", {})),
+                _json(cost.get("commission_data_issues", {})),
             ),
         )
 
@@ -235,18 +243,57 @@ def load_execution_costs(
     path = Path(db_path) if db_path is not None else DEFAULT_DB_PATH
     if not path.exists():
         return []
-    query = "SELECT run_id, order_id, timestamp, symbol, side, gross_notional, commission_quote, commission_bps, conversion_status FROM execution_costs ORDER BY timestamp ASC"
-    parameters: list[Any] = []
-    if limit is not None:
-        query += " LIMIT ?"
-        parameters.append(limit)
-    with sqlite3.connect(path) as connection:
+    readonly_uri = f"{path.resolve().as_uri()}?mode=ro"
+    with sqlite3.connect(readonly_uri, uri=True) as connection:
+        columns = {
+            str(row[1]) for row in connection.execute("PRAGMA table_info(execution_costs)")
+        }
+        if not columns:
+            return []
+        breakdown_column = (
+            "commission_by_asset_json"
+            if "commission_by_asset_json" in columns
+            else "'{}' AS commission_by_asset_json"
+        )
+        details_column = (
+            "commission_conversion_details_json"
+            if "commission_conversion_details_json" in columns
+            else "'{}' AS commission_conversion_details_json"
+        )
+        issues_column = (
+            "commission_data_issues_json"
+            if "commission_data_issues_json" in columns
+            else "'{}' AS commission_data_issues_json"
+        )
+        query = (
+            "SELECT run_id, order_id, timestamp, symbol, side, gross_notional, "
+            "commission_quote, commission_bps, conversion_status, "
+            f"{breakdown_column}, {details_column}, {issues_column} "
+            "FROM execution_costs ORDER BY timestamp ASC"
+        )
+        parameters: list[Any] = []
+        if limit is not None:
+            query += " LIMIT ?"
+            parameters.append(limit)
         rows = connection.execute(query, parameters).fetchall()
     fields = (
         "run_id", "order_id", "timestamp", "symbol", "side", "gross_notional",
         "commission_quote", "commission_bps", "conversion_status",
+        "commission_by_asset_json", "commission_conversion_details_json",
+        "commission_data_issues_json",
     )
-    return [dict(zip(fields, row)) for row in rows]
+    costs = [dict(zip(fields, row)) for row in rows]
+    for cost in costs:
+        cost["commission_by_asset"] = json.loads(
+            cost.pop("commission_by_asset_json") or "{}"
+        )
+        cost["commission_conversion_details"] = json.loads(
+            cost.pop("commission_conversion_details_json") or "{}"
+        )
+        cost["commission_data_issues"] = json.loads(
+            cost.pop("commission_data_issues_json") or "{}"
+        )
+    return costs
 
 
 def _ensure_schema(connection: sqlite3.Connection) -> None:
@@ -284,10 +331,25 @@ def _ensure_schema(connection: sqlite3.Connection) -> None:
             commission_quote TEXT,
             commission_bps TEXT,
             conversion_status TEXT NOT NULL,
+            commission_by_asset_json TEXT NOT NULL DEFAULT '{}',
+            commission_conversion_details_json TEXT NOT NULL DEFAULT '{}',
+            commission_data_issues_json TEXT NOT NULL DEFAULT '{}',
             PRIMARY KEY (run_id, order_id)
         )
         """
     )
+    cost_columns = {
+        str(row[1]) for row in connection.execute("PRAGMA table_info(execution_costs)")
+    }
+    for column in (
+        "commission_by_asset_json",
+        "commission_conversion_details_json",
+        "commission_data_issues_json",
+    ):
+        if column not in cost_columns:
+            connection.execute(
+                f"ALTER TABLE execution_costs ADD COLUMN {column} TEXT NOT NULL DEFAULT '{{}}'"
+            )
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS external_flows (
