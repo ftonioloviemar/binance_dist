@@ -64,14 +64,16 @@ reference-price and reward-history contracts are defined.
 
 ## Human decision
 
-- Selected option: **pending**
-- Include a separate money-weighted IRR: **pending**
+- Selected option: **1. P&L in quote currency + Modified Dietz when flow coverage is complete**
+- Include a separate money-weighted IRR: **no** (not selected)
 - Flow completeness source (user-certified ledger/import/API): **pending**
 
 ## Resume criteria
 
-- User selects one option and decides whether to add money-weighted IRR.
-- Define how complete external-flow coverage is established and represented.
+- User selects a source and certification workflow for complete external-flow
+  history; no live account/API access is assumed.
+- Represent the certified date range explicitly and keep horizons outside that
+  range incomplete.
 - Define accepted timestamps, valuation boundary, fees treatment, and the
   behavior for missing/ambiguous flows; only then move implementation work to
   `workflow/kanban/02_ready/`.
