@@ -81,6 +81,9 @@ class AdaptiveSourceAssessment:
     fear_greed_classification: str | None = None
     btc_change_24h: float | None = None
     market_cap_change_24h: float | None = None
+    btc_collected_at_utc: str | None = None
+    decision_time_utc: str | None = None
+    btc_age_seconds: float | None = None
 
 
 def _assess_adaptive_sources(
@@ -96,60 +99,63 @@ def _assess_adaptive_sources(
     btc_meta = sources.get("btc_24h")
     fear_data = data.get("fear_greed")
     btc_data = data.get("btc_24h")
+    btc_time = (
+        _parse_utc_timestamp(btc_meta.get("collected_at"))
+        if isinstance(btc_meta, dict)
+        else None
+    )
+    btc_age_seconds = (
+        (current_time - btc_time).total_seconds() if btc_time else None
+    )
+    timing = {
+        "btc_collected_at_utc": (
+            btc_time.isoformat().replace("+00:00", "Z") if btc_time else None
+        ),
+        "decision_time_utc": current_time.isoformat().replace("+00:00", "Z"),
+        "btc_age_seconds": btc_age_seconds,
+    }
+
+    def unavailable(reason: str) -> AdaptiveSourceAssessment:
+        return AdaptiveSourceAssessment("unavailable", reason, **timing)
 
     if not isinstance(fear_meta, dict) or fear_meta.get("status") != "fresh":
         status = fear_meta.get("status", "unknown") if isinstance(fear_meta, dict) else "unknown"
-        return AdaptiveSourceAssessment(
-            "unavailable", f"fear_greed required source is not fresh (status={status})"
+        return unavailable(
+            f"fear_greed required source is not fresh (status={status})"
         )
     if not isinstance(btc_meta, dict) or btc_meta.get("status") != "fresh":
         status = btc_meta.get("status", "unknown") if isinstance(btc_meta, dict) else "unknown"
-        return AdaptiveSourceAssessment(
-            "unavailable", f"btc_24h required source is not fresh (status={status})"
+        return unavailable(
+            f"btc_24h required source is not fresh (status={status})"
         )
     if not isinstance(fear_data, dict):
-        return AdaptiveSourceAssessment("unavailable", "fear_greed data is missing")
+        return unavailable("fear_greed data is missing")
     if not isinstance(btc_data, dict):
-        return AdaptiveSourceAssessment("unavailable", "btc_24h data is missing")
+        return unavailable("btc_24h data is missing")
 
     fear_value = fear_data.get("value")
     fear_classification = fear_data.get("classification")
     if type(fear_value) is not int or not 0 <= fear_value <= 100:
-        return AdaptiveSourceAssessment(
-            "unavailable", "fear_greed value is not an integer in 0..100"
-        )
+        return unavailable("fear_greed value is not an integer in 0..100")
     if not isinstance(fear_classification, str) or not fear_classification.strip():
-        return AdaptiveSourceAssessment(
-            "unavailable", "fear_greed classification is missing"
-        )
+        return unavailable("fear_greed classification is missing")
 
     fear_time = _parse_utc_timestamp(fear_meta.get("observed_at"))
     if fear_time is None:
-        return AdaptiveSourceAssessment(
-            "unavailable", "fear_greed provider timestamp is missing or invalid"
-        )
+        return unavailable("fear_greed provider timestamp is missing or invalid")
     fear_age = (current_time - fear_time).total_seconds()
     if fear_age < 0 or fear_age > 36 * 60 * 60:
-        return AdaptiveSourceAssessment(
-            "unavailable", "fear_greed provider observation is outside 0..36h"
-        )
+        return unavailable("fear_greed provider observation is outside 0..36h")
 
     btc_price = _finite_market_number(btc_data.get("price"))
     btc_change = _finite_market_number(btc_data.get("price_change_percent"))
-    btc_time = _parse_utc_timestamp(btc_meta.get("collected_at"))
     if btc_price is None or btc_price <= 0 or btc_change is None:
-        return AdaptiveSourceAssessment(
-            "unavailable", "btc_24h price or change is missing/invalid"
-        )
+        return unavailable("btc_24h price or change is missing/invalid")
     if btc_time is None:
-        return AdaptiveSourceAssessment(
-            "unavailable", "btc_24h collection timestamp is missing or invalid"
-        )
-    btc_age = (current_time - btc_time).total_seconds()
-    if btc_age < 0 or btc_age > 15 * 60:
-        return AdaptiveSourceAssessment(
-            "unavailable", "btc_24h collection is outside 0..15m"
-        )
+        return unavailable("btc_24h collection timestamp is missing or invalid")
+    assert btc_age_seconds is not None
+    if btc_age_seconds < 0 or btc_age_seconds > 15 * 60:
+        return unavailable("btc_24h collection is outside 0..15m")
 
     global_meta = sources.get("crypto_global")
     global_data = data.get("crypto_global")
@@ -178,6 +184,26 @@ def _assess_adaptive_sources(
         fear_greed_classification=fear_classification.strip(),
         btc_change_24h=btc_change,
         market_cap_change_24h=market_cap_change,
+        **timing,
+    )
+
+
+def _adaptive_timing_detail(assessment: AdaptiveSourceAssessment | None) -> str:
+    if assessment is None:
+        return (
+            "btc_collected_at_utc=unavailable, decision_time_utc=unavailable, "
+            "btc_age_seconds=unavailable"
+        )
+    btc_time = assessment.btc_collected_at_utc or "unavailable"
+    decision_time = assessment.decision_time_utc or "unavailable"
+    age = (
+        f"{assessment.btc_age_seconds:.3f}"
+        if assessment.btc_age_seconds is not None
+        else "unavailable"
+    )
+    return (
+        f"btc_collected_at_utc={btc_time}, "
+        f"decision_time_utc={decision_time}, btc_age_seconds={age}"
     )
 
 
@@ -579,7 +605,10 @@ def run_rebalance(args: argparse.Namespace) -> int:
                     logger.warning(
                         f"Adaptive strategy failed: {e}. Using standard parameters."
                     )
-                    adaptive_failure_detail = f"Failed to apply adaptive strategy: {e}"
+                    adaptive_failure_detail = (
+                        f"Failed to apply adaptive strategy: {e}; "
+                        f"{_adaptive_timing_detail(source_assessment)}"
+                    )
 
         # Atualizar config snapshot com possíveis mudanças adaptativas
         effective_profile = (
@@ -617,13 +646,17 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 f"sentiment={current_sentiment.value}, "
                 f"source_quality={source_assessment.quality}, "
                 f"source_reason={source_assessment.reason or 'none'}, "
-                f"targets_changed={targets_changed}",
+                f"targets_changed={targets_changed}; "
+                f"{_adaptive_timing_detail(source_assessment)}",
             )
         elif adaptive_fallback_reason:
             auditor.log_step(
                 name="adaptive_strategy",
                 status="warning",
-                detail=f"Adaptive source-quality fallback: {adaptive_fallback_reason}",
+                detail=(
+                    f"Adaptive source-quality fallback: {adaptive_fallback_reason}; "
+                    f"{_adaptive_timing_detail(source_assessment)}"
+                ),
             )
         elif adaptive_failure_detail:
             auditor.log_step(

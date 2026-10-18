@@ -213,7 +213,39 @@ def test_adaptive_freshness_accepts_limits_and_rejects_older_or_future_sources()
     snapshot.sources["btc_24h"]["collected_at"] = (
         now + timedelta(seconds=1)
     ).isoformat().replace("+00:00", "Z")
-    assert app._assess_adaptive_sources(snapshot, now=now).quality == "unavailable"
+    assessment = app._assess_adaptive_sources(snapshot, now=now)
+    assert assessment.quality == "unavailable"
+    assert assessment.btc_age_seconds == -1.0
+
+
+def test_invalid_btc_timestamp_is_not_echoed_in_assessment_diagnostics() -> None:
+    now = datetime(2026, 10, 3, 12, tzinfo=timezone.utc)
+    snapshot = _valid_adaptive_snapshot(now)
+    snapshot.sources["btc_24h"]["collected_at"] = "invalid-sensitive-value"
+
+    assessment = app._assess_adaptive_sources(snapshot, now=now)
+
+    assert assessment.quality == "unavailable"
+    assert assessment.btc_collected_at_utc is None
+    assert assessment.btc_age_seconds is None
+    assert assessment.decision_time_utc == "2026-10-03T12:00:00Z"
+    assert "invalid-sensitive-value" not in app._adaptive_timing_detail(assessment)
+
+
+def test_adaptive_assessment_captures_btc_source_timing() -> None:
+    now = datetime(2026, 10, 3, 12, tzinfo=timezone.utc)
+    snapshot = _valid_adaptive_snapshot(now)
+    collected_at = now - timedelta(minutes=16)
+    snapshot.sources["btc_24h"]["collected_at"] = (
+        collected_at.isoformat().replace("+00:00", "Z")
+    )
+
+    assessment = app._assess_adaptive_sources(snapshot, now=now)
+
+    assert assessment.quality == "unavailable"
+    assert assessment.btc_collected_at_utc == "2026-10-03T11:44:00Z"
+    assert assessment.decision_time_utc == "2026-10-03T12:00:00Z"
+    assert assessment.btc_age_seconds == 960.0
 
 
 @pytest.mark.parametrize(
@@ -545,6 +577,9 @@ def test_rebalance_audits_adaptive_strategy_after_run_start(
     assert shadow_step["status"] in {"completed", "incomplete", "warning", "skipped"}
     assert "slippage=0.45%" in adaptive_step["detail"]
     assert f"source_quality={source_quality}" in adaptive_step["detail"]
+    assert "btc_collected_at_utc=" in adaptive_step["detail"]
+    assert "decision_time_utc=" in adaptive_step["detail"]
+    assert "btc_age_seconds=" in adaptive_step["detail"]
     if explicit_targets is not None:
         assert "targets_changed=false" in adaptive_step["detail"]
     else:
@@ -609,18 +644,35 @@ def test_rebalance_persists_adaptive_strategy_failure(tmp_path: Path, monkeypatc
         step for step in detail["steps"] if step["name"] == "adaptive_strategy"
     )
     assert adaptive_step["status"] == "failed"
-    assert adaptive_step["detail"] == "Failed to apply adaptive strategy: adaptive boom"
+    assert adaptive_step["detail"].startswith(
+        "Failed to apply adaptive strategy: adaptive boom;"
+    )
+    assert "btc_collected_at_utc=" in adaptive_step["detail"]
+    assert "decision_time_utc=" in adaptive_step["detail"]
+    assert "btc_age_seconds=" in adaptive_step["detail"]
 
 
-@pytest.mark.parametrize("source_case", ["stale", "legacy", "overflow"])
+@pytest.mark.parametrize("source_case", ["stale", "legacy", "overflow", "stale_btc"])
 def test_rebalance_fails_closed_when_required_macro_source_is_untrusted(
     tmp_path: Path, monkeypatch, source_case: str
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(app, "BinanceClient", FakeClient)
+    now = datetime(2026, 10, 3, 12, tzinfo=timezone.utc)
     sources = _macro_sources()
     if source_case == "stale":
         sources["fear_greed"]["status"] = "cached"
+    if source_case == "stale_btc":
+        sources = _macro_sources(now=now)
+        sources["btc_24h"]["collected_at"] = (
+            (now - timedelta(minutes=16)).isoformat().replace("+00:00", "Z")
+        )
+        assess = app._assess_adaptive_sources
+
+        def assess_at_fixed_time(snapshot):
+            return assess(snapshot, now=now)
+
+        monkeypatch.setattr(app, "_assess_adaptive_sources", assess_at_fixed_time)
     btc_price = 10**10000 if source_case == "overflow" else 100.0
     monkeypatch.setattr(
         app,
@@ -681,6 +733,17 @@ def test_rebalance_fails_closed_when_required_macro_source_is_untrusted(
     assert adaptive_step["status"] == "warning"
     if source_case == "stale":
         assert "required source is not fresh" in adaptive_step["detail"]
+    elif source_case == "stale_btc":
+        assert "btc_24h collection is outside 0..15m" in adaptive_step["detail"]
+        assert (
+            "btc_collected_at_utc=2026-10-03T11:44:00Z"
+            in adaptive_step["detail"]
+        )
+        assert (
+            "decision_time_utc=2026-10-03T12:00:00Z"
+            in adaptive_step["detail"]
+        )
+        assert "btc_age_seconds=960.000" in adaptive_step["detail"]
     elif source_case == "legacy":
         assert "status=unknown" in adaptive_step["detail"]
     else:

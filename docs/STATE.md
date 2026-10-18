@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-10-14.
+Last updated: 2026-10-18.
 
 ## Purpose
 
@@ -20,10 +20,10 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 ## Current Work
 
-- Goal: harden Simple Earn Flexible Redeem diagnostics and align request construction with the current Binance contract; no live exchange operations.
-- `TASK-045` completed and committed as `7c1e8a9`: HTTP API errors retain sanitized status/code/message; focused tests 41 passed and full suite 223 passed.
-- `TASK-046-align-simple-earn-flexible-redeem-contract` is complete and independently audited; request/config implementation and 228-test full suite passed. The historical HTTP 400 cause remains unknown because its response body was not captured.
-- Audits from seven local runs showed intermittent redeem/subscribe failures; historical response bodies were not captured, so exact prior HTTP 400 cause is unknown. Do not add a guessed delay/retry or run live operations to diagnose.
+- Goal: make adaptive `btc_24h` freshness fallbacks diagnosable without changing strategy behavior.
+- `TASK-051-audit-adaptive-btc-source-age` completed: audit details now record UTC collection/decision times and signed BTC source age for adaptive applied, fallback, and calculation-failure outcomes.
+- Verification: adaptive tests -> 33 passed; full `uv run pytest` -> 280 passed; compileall and `git diff --check` passed. No live exchange/provider calls or schedule/config changes.
+- Historical cause of the 2026-10-17/18 stale-source fallbacks remains unproven; the next scheduled audit will include the missing timing evidence.
 
 ## Context Economy
 
@@ -78,11 +78,11 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 ## Current Goal
 
-- Goal: implement the approved "Onda de Melhoria dos Insights de Mercado".
-- Decision: adaptive source reliability may affect live adaptive availability after tests; new candle indicators and volatility guard remain shadow-only and cannot change live targets or OpenRouter advice.
-- Active card: `TASK-044-validate-and-operationalize-market-insights` in `03_doing`; TASK-042 and TASK-043 are done. Three-day heartbeat update and read-only report implementation are complete; final validation is documented in TASK-044.
+- Goal: observe the next scheduled adaptive run using the new BTC source-timing audit fields.
+- Decision: keep the 0..15 minute BTC freshness gate and base-profile fallback unchanged; do not change schedule or live allocation automatically.
+- Active card: none. `TASK-051-audit-adaptive-btc-source-age` is complete; see its kanban card for test and commit evidence.
 - Completed: `TASK-036` documented market-data reliability rules, shadow-session semantics, cost assumptions, and attribution boundaries; see `docs/market-insights.md` and `docs/strategy-scenario-b.md`.
-- Next: execute `TASK-037` through `TASK-044` one card and commit at a time.
+- Existing market-insights work remains documented below; its completed cards are historical context, not active tasks.
 - Strategy comparison is hypothetical and conditional on the advice/targets observed in each real run; use a separate SQLite store, full-precision quantities, explicit cost assumptions, and `incomplete` when data coverage is insufficient.
 - No live trades, Earn operations, production schedule change, automatic strategy activation, or new model calls for shadow evaluation.
 - Verification baseline before this wave: working tree clean at `77ff825`; 21.5 GB free on C:.
