@@ -21,7 +21,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 ## Current Work
 
 - Planning request: replace OpenRouter analysis with local Codex CLI, exactly `gpt-6-luna` / `medium`. TASK-052 documents the design and implementation wave in `docs/superpowers/specs/2026-10-21-codex-cli-analysis-design.md` and `docs/superpowers/plans/2026-10-21-codex-cli-analysis.md`.
-- User approved implementing the saved wave. TASK-053 completed in commit `b00f295`; TASK-054 completed offline; next card TASK-055.
+- User approved implementing the saved wave. TASK-053 completed in commit `b00f295`; TASK-054 completed offline in `5b64027`; TASK-055 integration passed independent audit and is complete pending commit.
+- TASK-055 focused checks: 47 passed, 1 known baseline test deselected; full suite: 334 passed, 7 baseline failures. No inference, launcher execution, or live exchange activity. Codex failure preserves exact deterministic proposed weights; TASK-056 remains the real-inference gate.
 - TASK-054 RED was confirmed (missing module); focused verification -> 62 passed. Full suite -> 315 passed, 7 unrelated baseline failures. Workdir is pinned outside the user profile at `%SystemRoot%\Temp`; matching `debug prompt-input` preflight found no global AGENTS marker. No real model call.
 - Unproven: mutable auth hard link, effective managed policy, complete real Codex API-vs-tool/network boundary, and Task Scheduler identity. This task validates controls passed to a fake and uses a harmless local helper only; real inference is deferred to TASK-056. Production activation requires separate explicit approval.
 - A prior MCP inventory command surfaced credential values in tool output. Do not repeat or store them; rotate potentially exposed affected credentials outside this implementation flow. No credentials were persisted and no rotation was performed.

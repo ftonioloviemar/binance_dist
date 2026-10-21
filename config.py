@@ -63,6 +63,9 @@ class EnvSettings:
     simple_earn_fast_redeem: bool = True
     simple_earn_exclude_assets: set[str] | None = None
     simple_earn_fast_redeem_configured: bool = False
+    ai_provider: str = "openrouter"
+    codex_cli_executable: str | None = None
+    codex_cli_timeout_seconds: int = 120
 
 
 @dataclass(slots=True)
@@ -102,7 +105,18 @@ def load_env_settings(recv_window: int) -> EnvSettings:
     base_url = "https://testnet.binance.vision" if testnet else "https://api.binance.com"
 
     openrouter_api_key = os.getenv("OPENROUTER_API_KEY")
-    openrouter_models = _load_openrouter_models()
+    ai_provider = os.getenv("AI_PROVIDER", "openrouter").strip().lower()
+    if ai_provider not in {"openrouter", "codex_cli", "off"}:
+        raise ConfigError("AI_PROVIDER must be openrouter, codex_cli, or off")
+    raw_codex_timeout = os.getenv("CODEX_CLI_TIMEOUT_SECONDS", "120")
+    try:
+        codex_cli_timeout_seconds = int(raw_codex_timeout)
+    except ValueError as exc:
+        raise ConfigError("CODEX_CLI_TIMEOUT_SECONDS must be an integer from 1 to 300") from exc
+    if not 1 <= codex_cli_timeout_seconds <= 300:
+        raise ConfigError("CODEX_CLI_TIMEOUT_SECONDS must be an integer from 1 to 300")
+    codex_cli_executable = os.getenv("CODEX_CLI_EXECUTABLE") or None
+    openrouter_models = _load_openrouter_models() if ai_provider == "openrouter" else ()
     model_name = openrouter_models[0] if openrouter_models else None
     model_fallback = openrouter_models[1] if len(openrouter_models) > 1 else None
     model_second_fallback = openrouter_models[2] if len(openrouter_models) > 2 else None
@@ -132,6 +146,9 @@ def load_env_settings(recv_window: int) -> EnvSettings:
         simple_earn_fast_redeem=simple_earn_fast_redeem,
         simple_earn_fast_redeem_configured=fast_redeem_raw is not None,
         simple_earn_exclude_assets=exclude_assets,
+        ai_provider=ai_provider,
+        codex_cli_executable=codex_cli_executable,
+        codex_cli_timeout_seconds=codex_cli_timeout_seconds,
     )
 
 

@@ -6,6 +6,7 @@ Production-ready CLI that connects to Binance Spot, evaluates portfolio drift, o
 - Deterministic CLI workflow with dry-run default and rich risk controls (drift, slippage, min-notional).
 - Modular architecture: env/config parsing, Binance REST client, portfolio math, execution planner, and audit logger.
 - Optional AI target refinement via OpenRouter with guardrails and safe fallbacks.
+- Dry-run Codex CLI candidate is documented in `docs/codex-cli-analysis.md` and launched separately with `run_codex_candidate.bat`.
 - Simple Earn automation (optional): consolidate Spot + Earn, consult AI for "maintain vs redistribute", redeem flexible positions, trade, and re-deposit idle balances respecting product limits.
 - Macro context enrichment: every run captures crypto market cap/dominance, fear & greed index, and BTC 24h stats to feed the AI decision.
 - Plain-text JSON log files (`logs/YYYYMMDD.log`) capture every run/step/order with automatic daily rotation.

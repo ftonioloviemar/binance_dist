@@ -142,3 +142,65 @@ def test_legacy_fast_redeem_setting_tracks_explicit_value(
 
     assert settings.simple_earn_fast_redeem is (value == "true")
     assert settings.simple_earn_fast_redeem_configured is True
+
+
+def test_codex_provider_does_not_require_openrouter_key_or_model_chain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_required_binance_env(monkeypatch)
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("OPENROUTER_MODELS_MODE", "manual")
+    monkeypatch.setenv("OPENROUTER_MODELS", " ; ")
+    monkeypatch.setenv("AI_PROVIDER", "codex_cli")
+
+    settings = load_env_settings(5000)
+
+    assert settings.ai_provider == "codex_cli"
+    assert settings.openrouter_api_key is None
+    assert settings.codex_cli_executable is None
+    assert settings.codex_cli_timeout_seconds == 120
+
+
+def test_codex_cli_settings_accept_custom_executable_and_timeout(monkeypatch) -> None:
+    _set_required_binance_env(monkeypatch)
+    monkeypatch.setenv("AI_PROVIDER", "codex_cli")
+    monkeypatch.setenv("CODEX_CLI_EXECUTABLE", "C:/tools/codex.exe")
+    monkeypatch.setenv("CODEX_CLI_TIMEOUT_SECONDS", "45")
+
+    settings = load_env_settings(5000)
+
+    assert settings.codex_cli_executable == "C:/tools/codex.exe"
+    assert settings.codex_cli_timeout_seconds == 45
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "codex_cli", "off"])
+def test_ai_provider_accepts_supported_values(monkeypatch, provider: str) -> None:
+    _set_required_binance_env(monkeypatch)
+    monkeypatch.setenv("AI_PROVIDER", provider)
+
+    assert load_env_settings(5000).ai_provider == provider
+
+
+def test_ai_provider_defaults_to_legacy_openrouter(monkeypatch) -> None:
+    _set_required_binance_env(monkeypatch)
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
+
+    assert load_env_settings(5000).ai_provider == "openrouter"
+
+
+def test_ai_provider_rejects_unknown_value(monkeypatch) -> None:
+    _set_required_binance_env(monkeypatch)
+    monkeypatch.setenv("AI_PROVIDER", "other")
+
+    with pytest.raises(ConfigError, match="AI_PROVIDER"):
+        load_env_settings(5000)
+
+
+@pytest.mark.parametrize("timeout", ["0", "-1", "301", "bad"])
+def test_codex_cli_timeout_must_be_between_one_and_300(monkeypatch, timeout: str) -> None:
+    _set_required_binance_env(monkeypatch)
+    monkeypatch.setenv("CODEX_CLI_TIMEOUT_SECONDS", timeout)
+
+    with pytest.raises(ConfigError, match="CODEX_CLI_TIMEOUT_SECONDS"):
+        load_env_settings(5000)

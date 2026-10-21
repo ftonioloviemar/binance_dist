@@ -6,7 +6,7 @@ import logging
 import math
 import sqlite3
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -30,6 +30,8 @@ from config import (
     select_profile_targets,
 )
 from adaptive_strategy import get_adaptive_manager, MarketSentiment
+from ai_contract import AnalysisRequest
+from codex_cli_analyzer import CodexCliSettings, analyze_with_codex
 from execution import execute_trades
 from logging_audit import AuditLogger, load_recent_runs, load_run_detail
 from macro_context import MacroSnapshot, fetch_macro_snapshot
@@ -39,6 +41,7 @@ from portfolio import (
     PortfolioError,
     PortfolioSnapshot,
     ai_refine_targets,
+    _apply_ai_guardrails,
     build_trades,
     compute_current_weights,
     decide_rebalance,
@@ -71,6 +74,100 @@ from shadow_observation import (
 from shadow_portfolios import ShadowRun
 
 logger = logging.getLogger("rebalance")
+
+
+def _resolve_ai_advice(env_settings, request: AnalysisRequest, auditor) -> AIAdvice:
+    provider = env_settings.ai_provider
+    if provider == "off":
+        advice = AIAdvice(
+            targets=dict(request.proposed_weights), action="redistribute", provider="off"
+        )
+        auditor.log_step(
+            name="ai_provider",
+            status="info",
+            detail="provider=off outcome=disabled fallback=deterministic",
+        )
+        return advice
+    if provider == "codex_cli":
+        advice = analyze_with_codex(
+            request,
+            CodexCliSettings(
+                executable=env_settings.codex_cli_executable,
+                timeout_seconds=env_settings.codex_cli_timeout_seconds,
+            ),
+        )
+        if advice.model_failures:
+            advice = replace(
+                advice,
+                targets=dict(request.proposed_weights),
+                action="redistribute",
+                provider="codex_cli",
+            )
+        else:
+            guarded = _apply_ai_guardrails(advice.targets, request.proposed_weights)
+            advice = replace(advice, targets=guarded, provider="codex_cli")
+        outcome = "failure" if advice.model_failures else "success"
+        fallback = "deterministic" if advice.model_failures else "none"
+        auditor.log_step(
+            name="ai_provider",
+            status="warning" if advice.model_failures else "info",
+            detail=(
+                f"provider=codex_cli model=gpt-6-luna effort=medium "
+                f"duration_seconds={advice.duration_seconds or 0:.3f} "
+                f"outcome={outcome} fallback={fallback}"
+            ),
+        )
+        for failure in advice.model_failures:
+            auditor.log_step(
+                name="ai_provider_failure",
+                status="warning",
+                detail=f"provider=codex_cli code={failure.error_type}",
+            )
+        return advice
+    return ai_refine_targets(
+        api_key=env_settings.openrouter_api_key,
+        models=list(env_settings.openrouter_models),
+        portfolio_value=request.portfolio_value,
+        current_weights=dict(request.current_weights),
+        proposed_weights=dict(request.proposed_weights),
+        portfolio_context=request.portfolio_context,
+    )
+
+
+def _refresh_openrouter_models_after_failure(
+    env_settings, advice: AIAdvice, models: list[str], auditor: AuditLogger
+) -> None:
+    if (
+        env_settings.ai_provider != "openrouter"
+        or not advice.first_model_failed
+        or not models
+    ):
+        return
+    first_failure = advice.model_failures[0] if advice.model_failures else None
+    failed_primary_model = first_failure.model if first_failure else models[0]
+    failure_reason = (
+        f"{first_failure.error_type}: {first_failure.detail}"
+        if first_failure
+        else "unknown first model failure"
+    )
+    try:
+        refresh_openrouter_models(
+            api_key=env_settings.openrouter_api_key,
+            current_models=models,
+            failed_primary_model=failed_primary_model,
+            failure_reason=failure_reason,
+        )
+        auditor.log_step(
+            name="openrouter_model_refresh",
+            status="completed",
+            detail=f"Refreshed after first model failure: {failed_primary_model}",
+        )
+    except Exception as exc:
+        auditor.log_step(
+            name="openrouter_model_refresh",
+            status="warning",
+            detail=f"Refresh skipped/failed after first model failure: {exc}",
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -690,65 +787,49 @@ def run_rebalance(args: argparse.Namespace) -> int:
         )
         spot_total_value = float(holdings_context.get("totals", {}).get("spot", 0.0))
         models = list(env_settings.openrouter_models)
-        detail_msg = (
-            f"Consulting {len(models)} AI model(s) on consolidated holdings"
-            if models and env_settings.openrouter_api_key
-            else "Skipping AI (no API key configured)"
-        )
+        if env_settings.ai_provider == "codex_cli":
+            detail_msg = "Consulting local Codex CLI on consolidated holdings"
+        elif env_settings.ai_provider == "off":
+            detail_msg = "AI disabled; using deterministic target allocation"
+        else:
+            detail_msg = (
+                f"Consulting {len(models)} AI model(s) on consolidated holdings"
+                if models and env_settings.openrouter_api_key
+                else "Skipping AI (no API key configured)"
+            )
         auditor.log_step(name="ai_consult", status="info", detail=detail_msg)
-        advice: AIAdvice = ai_refine_targets(
-            api_key=env_settings.openrouter_api_key,
-            models=models,
-            portfolio_value=consolidated_snapshot.total_value,
-            current_weights={
-                asset: pos.weight
-                for asset, pos in consolidated_snapshot.positions.items()
-            },
-            proposed_weights=target_weights,
-            portfolio_context=holdings_context,
+        advice: AIAdvice = _resolve_ai_advice(
+            env_settings,
+            AnalysisRequest(
+                portfolio_value=consolidated_snapshot.total_value,
+                current_weights={
+                    asset: pos.weight
+                    for asset, pos in consolidated_snapshot.positions.items()
+                },
+                proposed_weights=target_weights,
+                portfolio_context=holdings_context,
+            ),
+            auditor,
         )
         refined_targets = advice.targets
-        if advice.rationale:
+        if advice.rationale and advice.provider != "codex_cli":
             auditor.log_step(name="ai_consult", status="info", detail=advice.rationale)
-        for failure in advice.model_failures:
+        for failure in advice.model_failures if advice.provider != "codex_cli" else ():
             status = f" status={failure.status_code}" if failure.status_code else ""
             auditor.log_step(
                 name="ai_model_failure",
                 status="warning",
                 detail=f"{failure.model} {failure.error_type}{status}: {failure.detail}",
             )
-        if advice.model_used:
+        if advice.model_used and advice.provider != "codex_cli":
             auditor.log_step(
                 name="ai_model_used",
                 status="info",
                 detail=advice.model_used,
             )
-        if advice.first_model_failed and models:
-            first_failure = advice.model_failures[0] if advice.model_failures else None
-            failed_primary_model = first_failure.model if first_failure else models[0]
-            failure_reason = (
-                f"{first_failure.error_type}: {first_failure.detail}"
-                if first_failure
-                else "unknown first model failure"
-            )
-            try:
-                refresh_openrouter_models(
-                    api_key=env_settings.openrouter_api_key,
-                    current_models=models,
-                    failed_primary_model=failed_primary_model,
-                    failure_reason=failure_reason,
-                )
-                auditor.log_step(
-                    name="openrouter_model_refresh",
-                    status="completed",
-                    detail=f"Refreshed after first model failure: {failed_primary_model}",
-                )
-            except Exception as exc:
-                auditor.log_step(
-                    name="openrouter_model_refresh",
-                    status="warning",
-                    detail=f"Refresh skipped/failed after first model failure: {exc}",
-                )
+        _refresh_openrouter_models_after_failure(
+            env_settings, advice, models, auditor
+        )
         auditor.log_step(
             name="ai_directive", status="info", detail=f"Action={advice.action}"
         )
