@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-10-18.
+Last updated: 2026-10-21.
 
 ## Purpose
 
@@ -20,6 +20,9 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 ## Current Work
 
+- Planning request: replace OpenRouter analysis with local Codex CLI, exactly `gpt-6-luna` / `medium`. TASK-052 documents the design and implementation wave in `docs/superpowers/specs/2026-10-21-codex-cli-analysis-design.md` and `docs/superpowers/plans/2026-10-21-codex-cli-analysis.md`.
+- TASK-053..057 are in `00_pending_approval`: contract/isolation preflight, subprocess runner, candidate integration, synthetic acceptance, then separately authorized production activation. No implementation, inference, configuration, launcher or schedule changes in this planning step.
+- Next safe action: review the saved wave; after execution approval start TASK-053 offline. Model availability under the scheduled identity and effective CLI isolation remain unverified. Production activation requires separate explicit approval.
 - Goal: make adaptive `btc_24h` freshness fallbacks diagnosable without changing strategy behavior.
 - `TASK-051-audit-adaptive-btc-source-age` completed: audit details now record UTC collection/decision times and signed BTC source age for adaptive applied, fallback, and calculation-failure outcomes.
 - Verification: adaptive tests -> 33 passed; full `uv run pytest` -> 280 passed; compileall and `git diff --check` passed. No live exchange/provider calls or schedule/config changes.
@@ -78,6 +81,7 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 ## Current Goal
 
+- Latest user objective: plan the Codex CLI analysis version; implementation is pending. Earlier adaptive-source observation below remains an operational follow-up, not permission to change its strategy.
 - Goal: observe the next scheduled adaptive run using the new BTC source-timing audit fields.
 - Decision: keep the 0..15 minute BTC freshness gate and base-profile fallback unchanged; do not change schedule or live allocation automatically.
 - Active card: none. `TASK-051-audit-adaptive-btc-source-age` is complete; see its kanban card for test and commit evidence.
