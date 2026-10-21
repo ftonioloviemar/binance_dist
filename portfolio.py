@@ -84,6 +84,9 @@ class AIAdvice:
     model_used: str | None = None
     model_failures: tuple["AIModelFailure", ...] = ()
     first_model_failed: bool = False
+    provider: str | None = None
+    reasoning_effort: str | None = None
+    duration_seconds: float | None = None
 
 
 @dataclass(slots=True)

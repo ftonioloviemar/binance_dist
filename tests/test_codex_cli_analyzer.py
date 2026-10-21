@@ -1,0 +1,379 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import threading
+import time
+
+import pytest
+
+from ai_contract import AnalysisRequest
+
+
+def _request() -> AnalysisRequest:
+    return AnalysisRequest(
+        portfolio_value=1000,
+        current_weights={"BTC": 0.6, "ETH": 0.4},
+        proposed_weights={"BTC": 0.55, "ETH": 0.45},
+    )
+
+
+class _CompletedProcess:
+    def __init__(
+        self,
+        command: list[str],
+        kwargs: dict[str, object],
+        response: bytes | None,
+        returncode: int = 0,
+    ):
+        self.command = command
+        self.kwargs = kwargs
+        self.response = response
+        self.returncode = returncode
+
+    def communicate(self, input: str, timeout: float) -> tuple[str, str]:
+        self.kwargs["captured_input"] = input
+        self.kwargs["captured_timeout"] = timeout
+        if self.response is not None:
+            output_path = Path(self.command[self.command.index("--output-last-message") + 1])
+            output_path.write_bytes(self.response)
+        return '{"type":"agent_message","message":"not the final answer"}\n', ""
+
+
+def test_runner_requests_fixed_model_and_parses_only_final_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import codex_cli_analyzer
+
+    response = json.dumps(
+        {"action": "maintain", "targets": {"BTC": 0.55, "ETH": 0.45}, "rationale": "ok"}
+    ).encode("utf-8")
+    captured: dict[str, object] = {}
+
+    def fake_popen(command: list[str], **kwargs: object) -> _CompletedProcess:
+        captured["command"] = command
+        captured.update(kwargs)
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        home = Path(environment["CODEX_HOME"])
+        captured["home_exists_during_call"] = home.exists()
+        captured["home_has_user_config"] = (home / "config.toml").exists()
+        captured["home_mcp_entries"] = list(home.glob("mcp*"))
+        process = _CompletedProcess(command, kwargs, response)
+        captured["process"] = process
+        return process
+
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "C:/tools/codex.exe")
+    monkeypatch.setattr(codex_cli_analyzer.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("BINANCE_API_KEY", "sentinel-binance-key")
+    monkeypatch.setenv("BINANCE_API_SECRET", "sentinel-binance-secret")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sentinel-openrouter-key")
+
+    advice = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings()
+    )
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert command[command.index("--model") + 1] == "gpt-6-luna"
+    assert "--config" in command
+    config_values = [command[index + 1] for index, value in enumerate(command[:-1]) if value == "--config"]
+    assert 'model_reasoning_effort="medium"' in config_values
+    assert "features.shell_tool=false" in config_values
+    assert "features.apps=false" in config_values
+    assert "features.hooks=false" in config_values
+    assert "features.multi_agent=false" in config_values
+    assert "features.remote_plugin=false" in config_values
+    assert 'web_search="disabled"' in config_values
+    assert 'windows.sandbox="mxc"' in config_values
+    assert "--ignore-user-config" in command
+    assert "--ephemeral" in command
+    assert "--sandbox" in command
+    assert command[command.index("--sandbox") + 1] == "read-only"
+    assert "--json" in command
+    assert "--output-schema" in command
+    assert "--output-last-message" in command
+    assert command[-1] == "-"
+    assert captured["shell"] is False
+    assert captured["stdout"] is codex_cli_analyzer.subprocess.DEVNULL
+    assert captured["stderr"] is codex_cli_analyzer.subprocess.DEVNULL
+    process = captured["process"]
+    assert isinstance(process, _CompletedProcess)
+    assert process.kwargs["captured_input"] == codex_cli_analyzer.build_analysis_prompt(_request())
+    assert 0 < process.kwargs["captured_timeout"] <= 120
+    workdir = Path(str(captured["cwd"])).resolve()
+    assert workdir != Path.cwd().resolve()
+    if os.name == "nt":
+        system_temp = (Path(os.environ.get("SystemRoot", r"C:\Windows")) / "Temp").resolve()
+        user_home = Path.home().resolve()
+        assert workdir.is_relative_to(system_temp)
+        assert not workdir.is_relative_to(user_home)
+    child_env = captured["env"]
+    assert isinstance(child_env, dict)
+    assert not {"BINANCE_API_KEY", "BINANCE_API_SECRET", "OPENROUTER_API_KEY"} & set(child_env)
+    assert not {"sentinel-binance-key", "sentinel-binance-secret", "sentinel-openrouter-key"} & set(command)
+    isolated_home = Path(child_env["CODEX_HOME"])
+    assert captured["home_exists_during_call"]
+    assert not captured["home_has_user_config"]
+    assert not captured["home_mcp_entries"]
+    assert advice.targets == {"BTC": 0.55, "ETH": 0.45}
+    assert advice.action == "maintain"
+    assert advice.rationale == "ok"
+    assert advice.provider == "codex_cli"
+    assert advice.reasoning_effort == "medium"
+    assert not Path(str(captured["cwd"])).exists()
+    assert not isolated_home.exists()
+
+
+def test_runner_settings_enforce_timeout_bounds() -> None:
+    import codex_cli_analyzer
+
+    assert codex_cli_analyzer.CodexCliSettings().timeout_seconds == 120
+    assert codex_cli_analyzer.CodexCliSettings(timeout_seconds=300).timeout_seconds == 300
+    for timeout in (0, -1, 301, 1.5):
+        with pytest.raises(ValueError):
+            codex_cli_analyzer.CodexCliSettings(timeout_seconds=timeout)
+
+
+@pytest.mark.parametrize(
+    ("response", "returncode", "expected_error"),
+    [
+        (None, 0, "output_missing"),
+        (b"not-json", 0, "output_invalid"),
+        (b"\xff", 0, "output_encoding"),
+        (b"x" * (64 * 1024 + 1), 0, "output_too_large"),
+        (None, 1, "process_failed"),
+    ],
+    ids=["missing", "malformed", "invalid-utf8", "oversized", "nonzero-exit"],
+)
+def test_failures_return_sanitized_deterministic_advice(
+    monkeypatch: pytest.MonkeyPatch,
+    response: bytes | None,
+    returncode: int,
+    expected_error: str,
+) -> None:
+    import codex_cli_analyzer
+    working_directories: list[Path] = []
+
+    def fake_popen(command: list[str], **kwargs: object) -> _CompletedProcess:
+        working_directories.append(Path(str(kwargs["cwd"])))
+        return _CompletedProcess(command, kwargs, response, returncode)
+
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "codex.exe")
+    monkeypatch.setattr(codex_cli_analyzer.subprocess, "Popen", fake_popen)
+    monkeypatch.setenv("BINANCE_API_KEY", "sentinel-binance-key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sentinel-openrouter-key")
+
+    advice = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings()
+    )
+
+    assert advice.targets == _request().proposed_weights
+    assert advice.action == "redistribute"
+    assert advice.model_failures[0].error_type == expected_error
+    assert "sentinel" not in repr(advice)
+    assert "not-json" not in repr(advice)
+    assert advice.provider == "codex_cli"
+    assert len(working_directories) == 1
+    assert not working_directories[0].exists()
+
+
+def test_missing_executable_and_spawn_error_are_typed_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import codex_cli_analyzer
+
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: None)
+    missing = codex_cli_analyzer.analyze_with_codex(_request(), codex_cli_analyzer.CodexCliSettings())
+    assert missing.model_failures[0].error_type == "executable_not_found"
+
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "codex.exe")
+
+    def fail_to_spawn(*args: object, **kwargs: object) -> None:
+        raise OSError("secret-bearing exception should not escape")
+
+    monkeypatch.setattr(codex_cli_analyzer.subprocess, "Popen", fail_to_spawn)
+    spawn_failure = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings()
+    )
+    assert spawn_failure.model_failures[0].error_type == "process_start_error"
+    assert "secret-bearing" not in repr(spawn_failure)
+
+
+def test_isolated_home_uses_and_removes_only_the_temporary_auth_hardlink(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import codex_cli_analyzer
+
+    source_home = tmp_path / "source-codex-home"
+    source_home.mkdir()
+    source_auth = source_home / "auth.json"
+    source_auth.write_bytes(b"synthetic-auth-fixture")
+    original_hash = hashlib.sha256(source_auth.read_bytes()).hexdigest()
+    response = json.dumps(
+        {"action": "maintain", "targets": {"BTC": 0.55, "ETH": 0.45}, "rationale": "ok"}
+    ).encode("utf-8")
+    observed: dict[str, Path] = {}
+
+    def fake_popen(command: list[str], **kwargs: object) -> _CompletedProcess:
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        linked_auth = Path(environment["CODEX_HOME"]) / "auth.json"
+        assert linked_auth.exists()
+        assert os.path.samefile(linked_auth, source_auth)
+        observed["linked_auth"] = linked_auth
+        return _CompletedProcess(command, kwargs, response)
+
+    monkeypatch.setenv("CODEX_HOME", str(source_home))
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "codex.exe")
+    monkeypatch.setattr(codex_cli_analyzer.subprocess, "Popen", fake_popen)
+
+    advice = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings()
+    )
+
+    assert advice.action == "maintain"
+    assert not observed["linked_auth"].exists()
+    assert hashlib.sha256(source_auth.read_bytes()).hexdigest() == original_hash
+
+
+def test_timeout_terminates_process_and_returns_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import codex_cli_analyzer
+
+    captured: dict[str, object] = {}
+
+    class TimedOutProcess:
+        pid = 12345
+        returncode = None
+
+        def communicate(self, **kwargs: object) -> None:
+            raise subprocess.TimeoutExpired("codex", timeout=kwargs["timeout"])
+
+        def poll(self) -> None:
+            return None
+
+        def kill(self) -> None:
+            self.returncode = -9
+
+        def wait(self, timeout: float) -> int:
+            self.returncode = -9
+            return self.returncode
+
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "codex.exe")
+    def fake_popen(command: list[str], **kwargs: object) -> TimedOutProcess:
+        captured.update(kwargs)
+        process = TimedOutProcess()
+        captured["process"] = process
+        return process
+
+    monkeypatch.setattr(codex_cli_analyzer.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(codex_cli_analyzer.subprocess, "run", lambda *a, **k: None)
+
+    advice = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings(timeout_seconds=1)
+    )
+
+    assert advice.model_failures[0].error_type == "timeout"
+    assert advice.targets == _request().proposed_weights
+    assert not Path(str(captured["cwd"])).exists()
+    assert captured["process"].returncode == -9
+
+
+def test_concurrent_calls_use_unique_workdirs_and_keep_prompt_out_of_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import codex_cli_analyzer
+
+    response = json.dumps(
+        {"action": "maintain", "targets": {"BTC": 0.55, "ETH": 0.45}, "rationale": "ok"}
+    ).encode("utf-8")
+    captured: list[tuple[list[str], dict[str, object]]] = []
+    lock = threading.Lock()
+
+    def fake_popen(command: list[str], **kwargs: object) -> _CompletedProcess:
+        with lock:
+            captured.append((command, kwargs))
+        return _CompletedProcess(command, kwargs, response)
+
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "codex.exe")
+    monkeypatch.setattr(codex_cli_analyzer.subprocess, "Popen", fake_popen)
+    request = AnalysisRequest(
+        portfolio_value=1000,
+        current_weights={"BTC": 0.6, "ETH": 0.4},
+        proposed_weights={"BTC": 0.55, "ETH": 0.45},
+        portfolio_context={"note": 'quote " & pipe | $() ` ;'},
+    )
+    answers = []
+    threads = [
+        threading.Thread(
+            target=lambda: answers.append(
+                codex_cli_analyzer.analyze_with_codex(request, codex_cli_analyzer.CodexCliSettings())
+            )
+        )
+        for _ in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert len(answers) == 2
+    assert all(answer.action == "maintain" for answer in answers)
+    working_directories = [str(kwargs["cwd"]) for _, kwargs in captured]
+    assert len(set(working_directories)) == 2
+    for command, kwargs in captured:
+        assert request.portfolio_context["note"] not in command
+        assert json.dumps(request.portfolio_context) in codex_cli_analyzer.build_analysis_prompt(request)
+        assert kwargs["captured_input"] == codex_cli_analyzer.build_analysis_prompt(request)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process-tree termination contract")
+def test_windows_timeout_kills_descendant_before_late_write(tmp_path: Path) -> None:
+    import codex_cli_analyzer
+
+    child_marker = tmp_path / "late-write.txt"
+    child_pid_file = tmp_path / "child.pid"
+    child_program = (
+        "import pathlib,time; time.sleep(3); "
+        f"pathlib.Path({str(child_marker)!r}).write_text('late')"
+    )
+    parent_program = (
+        "import pathlib,subprocess,sys,time; "
+        f"child=subprocess.Popen([sys.executable,'-c',{child_program!r}]); "
+        f"pathlib.Path({str(child_pid_file)!r}).write_text(str(child.pid)); "
+        "time.sleep(60)"
+    )
+    process = subprocess.Popen([sys.executable, "-c", parent_program], shell=False)
+    deadline = time.monotonic() + 3
+    while not child_pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert child_pid_file.exists()
+    child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+
+    codex_cli_analyzer._terminate_process_tree(process, time.monotonic() + 5)
+    assert process.poll() is not None
+    time.sleep(3.2)
+    assert not child_marker.exists()
+    processes = subprocess.run(
+        ["tasklist.exe", "/FI", f"PID eq {child_pid}", "/FO", "CSV", "/NH"],
+        capture_output=True,
+        text=True,
+        shell=False,
+        check=False,
+    )
+    import csv
+
+    listed_pids = {
+        int(row[1])
+        for row in csv.reader(processes.stdout.splitlines())
+        if len(row) > 1 and row[1].isdigit()
+    }
+    assert child_pid not in listed_pids
