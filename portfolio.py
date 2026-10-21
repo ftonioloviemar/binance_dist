@@ -11,6 +11,7 @@ import time
 
 import requests
 
+from ai_contract import AnalysisRequest, build_analysis_prompt
 from binance_client import Balance, SymbolFilters
 from config import load_guardrails, load_stable_assets
 
@@ -216,22 +217,14 @@ def _call_openrouter_model(
     proposed_weights: Mapping[str, float],
     portfolio_context: Mapping[str, Any] | None = None,
 ) -> OpenRouterModelResult:
-    context_payload: Dict[str, Any] = {
-        "currentWeights": current_weights,
-        "proposedWeights": proposed_weights,
-        "portfolioValue": portfolio_value,
-    }
-    if portfolio_context:
-        context_payload["holdings"] = portfolio_context
-    prompt = (
-        "Analyze the consolidated crypto portfolio described by the following JSON context: {context}. "
-        "Decide whether to maintain the current allocation ('maintain') or recommend a redistribution ('redistribute'). "
-        "If redistribution is recommended, adjust target weights within +/-0.05 absolute weight from the proposed targets. "
-        "Always respond with JSON containing: "
-        "\"action\" (\"maintain\" or \"redistribute\"), "
-        "\"targets\" (object mapping asset symbol to weight), and "
-        "\"rationale\" (short string)."
-    ).format(context=json.dumps(context_payload))
+    prompt = build_analysis_prompt(
+        AnalysisRequest(
+            portfolio_value=portfolio_value,
+            current_weights=current_weights,
+            proposed_weights=proposed_weights,
+            portfolio_context=portfolio_context,
+        )
+    )
     payload = {
         "model": model_name,
         "response_format": {"type": "json_object"},
