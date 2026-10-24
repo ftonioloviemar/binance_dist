@@ -86,9 +86,10 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 ## Current Goal
 
-- Latest user objective: implement the Codex CLI analysis version. TASK-053 through TASK-056 are complete; TASK-057 is actively executing under explicit production and next-cycle authorization. Earlier adaptive-source observation below remains an operational follow-up, not permission to change its strategy.
-- Active card: TASK-057 in `workflow/kanban/03_doing/`; TASK-056 is complete in `workflow/kanban/05_done/`. Production cutover and observation of the next scheduled live cycle are authorized; manual live runs and scheduled-task changes remain out of scope.
-- Goal: observe the next scheduled adaptive run using the new BTC source-timing audit fields.
+- Latest user objective: implement the Codex CLI analysis version. TASK-053 through TASK-056 are complete; TASK-057 is actively executing under explicit production and next-cycle authorization. The exposed OpenRouter key is disabled; do not create a replacement unless rollback requires OpenRouter.
+- Active card: TASK-057 in `workflow/kanban/03_doing/`; TASK-056 is complete in `workflow/kanban/05_done/`. Production cutover is authorized and complete; observation of the next scheduled live cycle is pending. Manual live runs and scheduled-task changes remain out of scope.
+- Current verification: focused Codex/provider tests -> 73 passed; full suite -> 368 passed, 6 known adaptive failures. Candidate test-isolation fixes are committed as `e4b54a4`; see TASK-057 for details.
+- Next step: observe the scheduled 2026-10-24 21:00 -03:00 cycle via the one-shot read-only check scheduled for 21:10. Do not manually start the task.
 - Decision: keep the 0..15 minute BTC freshness gate and base-profile fallback unchanged; do not change schedule or live allocation automatically.
 - Active card: none. `TASK-051-audit-adaptive-btc-source-age` is complete; see its kanban card for test and commit evidence.
 - Completed: `TASK-036` documented market-data reliability rules, shadow-session semantics, cost assumptions, and attribution boundaries; see `docs/market-insights.md` and `docs/strategy-scenario-b.md`.
