@@ -709,6 +709,7 @@ def test_windows_timeout_kills_descendant_before_late_write(tmp_path: Path) -> N
 
     child_marker = tmp_path / "late-write.txt"
     child_pid_file = tmp_path / "child.pid"
+    child_pid_temp_file = tmp_path / "child.pid.tmp"
     child_program = (
         "import pathlib,time; time.sleep(3); "
         f"pathlib.Path({str(child_marker)!r}).write_text('late')"
@@ -716,7 +717,8 @@ def test_windows_timeout_kills_descendant_before_late_write(tmp_path: Path) -> N
     parent_program = (
         "import pathlib,subprocess,sys,time; "
         f"child=subprocess.Popen([sys.executable,'-c',{child_program!r}]); "
-        f"pathlib.Path({str(child_pid_file)!r}).write_text(str(child.pid)); "
+        f"pathlib.Path({str(child_pid_temp_file)!r}).write_text(str(child.pid)); "
+        f"pathlib.Path({str(child_pid_temp_file)!r}).replace({str(child_pid_file)!r}); "
         "time.sleep(60)"
     )
     process = subprocess.Popen([sys.executable, "-c", parent_program], shell=False)

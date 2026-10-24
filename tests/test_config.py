@@ -9,12 +9,14 @@ from config import ConfigError, load_cli_defaults, load_env_settings
 def _set_required_binance_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BINANCE_API_KEY", "key")
     monkeypatch.setenv("BINANCE_API_SECRET", "secret")
+    monkeypatch.delenv("AI_PROVIDER", raising=False)
 
 
 def test_load_cli_defaults_uses_notional_aware_three_percent_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("DEFAULT_DRIFT", raising=False)
+    monkeypatch.setenv("DEFAULT_MIN_NOTIONAL_UPLIFT_TOLERANCE", "0.10")
 
     defaults = load_cli_defaults()
 
