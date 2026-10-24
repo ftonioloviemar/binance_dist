@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import errno
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,12 @@ def _request() -> AnalysisRequest:
         current_weights={"BTC": 0.6, "ETH": 0.4},
         proposed_weights={"BTC": 0.55, "ETH": 0.45},
     )
+
+
+def _windows_error(winerror: int, error_number: int) -> OSError:
+    error = OSError(error_number, "secret")
+    error.winerror = winerror
+    return error
 
 
 class _CompletedProcess:
@@ -183,7 +190,7 @@ def test_failures_return_sanitized_deterministic_advice(
     assert not working_directories[0].exists()
 
 
-def test_missing_executable_and_spawn_error_are_typed_fallbacks(
+def test_missing_executable_and_process_spawn_error_are_typed_fallbacks(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import codex_cli_analyzer
@@ -201,11 +208,370 @@ def test_missing_executable_and_spawn_error_are_typed_fallbacks(
     spawn_failure = codex_cli_analyzer.analyze_with_codex(
         _request(), codex_cli_analyzer.CodexCliSettings()
     )
-    assert spawn_failure.model_failures[0].error_type == "process_start_error"
+    assert spawn_failure.model_failures[0].error_type == "process_spawn_error"
     assert "secret-bearing" not in repr(spawn_failure)
 
 
-def test_isolated_home_uses_and_removes_only_the_temporary_auth_hardlink(
+def test_process_communication_error_is_sanitized_and_terminates_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import codex_cli_analyzer
+
+    class CommunicationFailure:
+        pid = 12345
+        returncode = None
+
+        def communicate(self, **kwargs: object) -> None:
+            raise OSError("secret-bearing communication detail")
+
+    process = CommunicationFailure()
+    terminated: list[object] = []
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "codex.exe")
+    monkeypatch.setattr(codex_cli_analyzer.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(
+        codex_cli_analyzer,
+        "_terminate_process_tree",
+        lambda child, deadline: terminated.append(child),
+    )
+
+    advice = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings()
+    )
+
+    assert advice.model_failures[0].error_type == "process_communication_error"
+    assert "secret-bearing" not in repr(advice)
+    assert terminated == [process]
+
+
+@pytest.mark.parametrize("remove_before_error", [True, False])
+@pytest.mark.parametrize("verification_error", [None, PermissionError("secret /private/path")])
+@pytest.mark.parametrize(
+    ("returncode", "expected_error", "expected_action"),
+    [(0, None, "maintain"), (1, "process_failed", "redistribute")],
+)
+def test_cleanup_error_preserves_result_only_when_workspace_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+    remove_before_error: bool,
+    verification_error: OSError | None,
+    returncode: int,
+    expected_error: str | None,
+    expected_action: str,
+) -> None:
+    import codex_cli_analyzer
+
+    original_temporary_directory = codex_cli_analyzer.tempfile.TemporaryDirectory
+    temporary_paths: list[Path] = []
+    temporary_directories: list[object] = []
+    cleanup_attempts: list[int] = []
+
+    class CleanupRaisesAfterRemoval:
+        def __init__(self, **kwargs: object) -> None:
+            self._temporary_directory = original_temporary_directory(**kwargs)
+            self.name = self._temporary_directory.name
+            temporary_paths.append(Path(self.name))
+            temporary_directories.append(self._temporary_directory)
+
+        def __enter__(self) -> str:
+            return self._temporary_directory.__enter__()
+
+        def __exit__(self, *args: object) -> None:
+            cleanup_attempts.append(1)
+            if remove_before_error:
+                self._temporary_directory.cleanup()
+            raise OSError("secret-bearing cleanup detail")
+
+    response = json.dumps(
+        {"action": "maintain", "targets": {"BTC": 0.55, "ETH": 0.45}, "rationale": "ok"}
+    ).encode("utf-8")
+    monkeypatch.setattr(
+        codex_cli_analyzer.tempfile,
+        "TemporaryDirectory",
+        CleanupRaisesAfterRemoval,
+    )
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "codex.exe")
+    monkeypatch.setattr(
+        codex_cli_analyzer.subprocess,
+        "Popen",
+        lambda command, **kwargs: _CompletedProcess(command, kwargs, response, returncode),
+    )
+    if verification_error is not None:
+        original_stat = Path.stat
+        workspace_path: Path | None = None
+
+        def fail_workspace_stat(path: Path, *args: object, **kwargs: object):
+            if workspace_path is not None and path == workspace_path:
+                raise verification_error
+            return original_stat(path, *args, **kwargs)
+
+        original_temporary_directory_init = CleanupRaisesAfterRemoval.__init__
+
+        def record_workspace(self, **kwargs: object) -> None:
+            nonlocal workspace_path
+            original_temporary_directory_init(self, **kwargs)
+            workspace_path = Path(self.name)
+
+        monkeypatch.setattr(CleanupRaisesAfterRemoval, "__init__", record_workspace)
+        monkeypatch.setattr(Path, "stat", fail_workspace_stat)
+
+    advice = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings()
+    )
+    if verification_error is not None:
+        monkeypatch.undo()
+
+    if verification_error is not None:
+        expected_error = "cleanup_state_unknown"
+        expected_action = "redistribute"
+    elif not remove_before_error:
+        expected_error = "cleanup_workspace_retained"
+        expected_action = "redistribute"
+    assert advice.action == expected_action
+    assert advice.targets == _request().proposed_weights
+    if expected_error is None:
+        assert advice.model_failures == ()
+    else:
+        assert advice.model_failures[0].error_type == expected_error
+    assert len(temporary_paths) == 1
+    assert cleanup_attempts == [1]
+    assert temporary_paths[0].exists() is not remove_before_error
+    if not remove_before_error:
+        temporary_directories[0].cleanup()
+        assert not temporary_paths[0].exists()
+    assert "secret-bearing" not in repr(advice)
+    assert "secret /private/path" not in repr(advice)
+
+
+@pytest.mark.parametrize(
+    ("winerror", "error_number"),
+    [(32, errno.EACCES), (33, errno.EACCES), (None, errno.EBUSY)],
+)
+def test_transient_busy_cleanup_retries_once_and_preserves_response(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    winerror: int | None,
+    error_number: int,
+) -> None:
+    import codex_cli_analyzer
+
+    original_temporary_directory = codex_cli_analyzer.tempfile.TemporaryDirectory
+    cleanup_attempts: list[int] = []
+    temporary_paths: list[Path] = []
+    sleeps: list[float] = []
+
+    class BusyThenSuccess:
+        def __init__(self, **kwargs: object) -> None:
+            self._temporary_directory = original_temporary_directory(**kwargs)
+            self.name = self._temporary_directory.name
+            temporary_paths.append(Path(self.name))
+
+        def __enter__(self) -> str:
+            return self._temporary_directory.__enter__()
+
+        def __exit__(self, *args: object) -> None:
+            cleanup_attempts.append(1)
+            if len(cleanup_attempts) <= 3:
+                error = OSError(error_number, "secret cleanup detail")
+                if winerror is not None:
+                    error.winerror = winerror
+                raise error
+            self._temporary_directory.__exit__(*args)
+
+    response = json.dumps(
+        {"action": "maintain", "targets": {"BTC": 0.55, "ETH": 0.45}, "rationale": "ok"}
+    ).encode("utf-8")
+    monkeypatch.setattr(codex_cli_analyzer, "_temporary_root", lambda: tmp_path)
+    monkeypatch.setattr(codex_cli_analyzer, "_copy_authentication_file", lambda _: None)
+    monkeypatch.setattr(codex_cli_analyzer.tempfile, "TemporaryDirectory", BusyThenSuccess)
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "codex.exe")
+    monkeypatch.setattr(
+        codex_cli_analyzer.subprocess,
+        "Popen",
+        lambda command, **kwargs: _CompletedProcess(command, kwargs, response),
+    )
+    monkeypatch.setattr(codex_cli_analyzer.time, "sleep", sleeps.append)
+
+    advice = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings()
+    )
+
+    assert advice.action == "maintain"
+    assert advice.model_failures == ()
+    assert cleanup_attempts == [1, 1, 1, 1]
+    assert sleeps == [0.05, 0.1, 0.2]
+    assert len(temporary_paths) == 1
+    assert not temporary_paths[0].exists()
+    assert "secret cleanup detail" not in repr(advice)
+
+
+def test_transient_busy_cleanup_exhaustion_returns_sanitized_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import codex_cli_analyzer
+
+    original_temporary_directory = codex_cli_analyzer.tempfile.TemporaryDirectory
+    cleanup_attempts: list[int] = []
+    temporary_directories: list[object] = []
+    sleeps: list[float] = []
+
+    class AlwaysBusy:
+        def __init__(self, **kwargs: object) -> None:
+            self._temporary_directory = original_temporary_directory(**kwargs)
+            self.name = self._temporary_directory.name
+            temporary_directories.append(self._temporary_directory)
+
+        def __enter__(self) -> str:
+            return self._temporary_directory.__enter__()
+
+        def __exit__(self, *args: object) -> None:
+            cleanup_attempts.append(1)
+            raise _windows_error(32, errno.EACCES)
+
+    response = json.dumps(
+        {"action": "maintain", "targets": {"BTC": 0.55, "ETH": 0.45}, "rationale": "secret rationale"}
+    ).encode("utf-8")
+    monkeypatch.setattr(codex_cli_analyzer, "_temporary_root", lambda: tmp_path)
+    monkeypatch.setattr(codex_cli_analyzer, "_copy_authentication_file", lambda _: None)
+    monkeypatch.setattr(codex_cli_analyzer.tempfile, "TemporaryDirectory", AlwaysBusy)
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "codex.exe")
+    monkeypatch.setattr(
+        codex_cli_analyzer.subprocess,
+        "Popen",
+        lambda command, **kwargs: _CompletedProcess(command, kwargs, response),
+    )
+    monkeypatch.setattr(codex_cli_analyzer.time, "sleep", sleeps.append)
+
+    advice = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings()
+    )
+
+    assert advice.model_failures[0].error_type == "cleanup_sharing_violation"
+    assert advice.rationale is None
+    assert cleanup_attempts == [1, 1, 1, 1, 1]
+    assert sleeps == [0.05, 0.1, 0.2, 0.4]
+    assert "secret rationale" not in repr(advice)
+    temporary_directories[0].cleanup()
+
+
+def test_cleanup_permission_error_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import codex_cli_analyzer
+
+    original_temporary_directory = codex_cli_analyzer.tempfile.TemporaryDirectory
+    cleanup_attempts: list[int] = []
+    temporary_directories: list[object] = []
+
+    class PermissionDenied:
+        def __init__(self, **kwargs: object) -> None:
+            self._temporary_directory = original_temporary_directory(**kwargs)
+            self.name = self._temporary_directory.name
+            temporary_directories.append(self._temporary_directory)
+
+        def __enter__(self) -> str:
+            return self._temporary_directory.__enter__()
+
+        def __exit__(self, *args: object) -> None:
+            cleanup_attempts.append(1)
+            raise _windows_error(5, errno.EBUSY)
+
+    response = json.dumps(
+        {"action": "maintain", "targets": {"BTC": 0.55, "ETH": 0.45}, "rationale": "ok"}
+    ).encode("utf-8")
+    monkeypatch.setattr(codex_cli_analyzer, "_temporary_root", lambda: tmp_path)
+    monkeypatch.setattr(codex_cli_analyzer, "_copy_authentication_file", lambda _: None)
+    monkeypatch.setattr(codex_cli_analyzer.tempfile, "TemporaryDirectory", PermissionDenied)
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: "codex.exe")
+    monkeypatch.setattr(
+        codex_cli_analyzer.subprocess,
+        "Popen",
+        lambda command, **kwargs: _CompletedProcess(command, kwargs, response),
+    )
+
+    advice = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings()
+    )
+
+    assert advice.model_failures[0].error_type == "cleanup_permission_error"
+    assert cleanup_attempts == [1]
+    temporary_directories[0].cleanup()
+
+
+def test_busy_cleanup_retry_wait_respects_cleanup_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import codex_cli_analyzer
+
+    original_temporary_directory = codex_cli_analyzer.tempfile.TemporaryDirectory
+    cleanup_attempts: list[int] = []
+    temporary_directories: list[object] = []
+    sleeps: list[float] = []
+    clock = [10.0]
+
+    class AlwaysBusy:
+        def __init__(self, **kwargs: object) -> None:
+            self._temporary_directory = original_temporary_directory(**kwargs)
+            self.name = self._temporary_directory.name
+            temporary_directories.append(self._temporary_directory)
+
+        def __enter__(self) -> str:
+            return self._temporary_directory.__enter__()
+
+        def __exit__(self, *args: object) -> None:
+            cleanup_attempts.append(1)
+            raise _windows_error(32, errno.EACCES)
+
+    def advance_clock(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    monkeypatch.setattr(codex_cli_analyzer.tempfile, "TemporaryDirectory", AlwaysBusy)
+    monkeypatch.setattr(codex_cli_analyzer.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(codex_cli_analyzer.time, "sleep", advance_clock)
+
+    with pytest.raises(OSError):
+        with codex_cli_analyzer._temporary_directory_with_cleanup_retry(
+            cleanup_deadline=10.1,
+            prefix="codex-analysis-",
+            dir=tmp_path,
+        ):
+            pass
+
+    assert cleanup_attempts == [1, 1]
+    assert sleeps == [0.05]
+    temporary_directories[0].cleanup()
+
+
+@pytest.mark.parametrize(
+    ("error", "workspace_state", "expected_error"),
+    [
+        (PermissionError(errno.EACCES, "secret"), "retained", "cleanup_permission_error"),
+        (OSError(errno.EACCES, "secret"), "unknown", "cleanup_permission_error"),
+        (_windows_error(5, errno.EACCES), "retained", "cleanup_permission_error"),
+        (_windows_error(5, errno.EBUSY), "retained", "cleanup_permission_error"),
+        (_windows_error(32, errno.EACCES), "retained", "cleanup_sharing_violation"),
+        (_windows_error(33, errno.EACCES), "unknown", "cleanup_lock_violation"),
+        (OSError(errno.EBUSY, "secret"), "retained", "cleanup_resource_busy"),
+        (OSError("secret"), "retained", "cleanup_workspace_retained"),
+        (OSError("secret"), "unknown", "cleanup_state_unknown"),
+    ],
+)
+def test_cleanup_failure_classification_is_sanitized(
+    error: OSError,
+    workspace_state: str,
+    expected_error: str,
+) -> None:
+    import codex_cli_analyzer
+
+    failure_type = codex_cli_analyzer._cleanup_failure_type(error, workspace_state)
+
+    assert failure_type == expected_error
+    assert "secret" not in repr(failure_type)
+
+
+def test_isolated_home_uses_and_removes_only_an_independent_temporary_auth_copy(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -224,10 +590,12 @@ def test_isolated_home_uses_and_removes_only_the_temporary_auth_hardlink(
     def fake_popen(command: list[str], **kwargs: object) -> _CompletedProcess:
         environment = kwargs["env"]
         assert isinstance(environment, dict)
-        linked_auth = Path(environment["CODEX_HOME"]) / "auth.json"
-        assert linked_auth.exists()
-        assert os.path.samefile(linked_auth, source_auth)
-        observed["linked_auth"] = linked_auth
+        copied_auth = Path(environment["CODEX_HOME"]) / "auth.json"
+        assert copied_auth.exists()
+        assert not os.path.samefile(copied_auth, source_auth)
+        assert copied_auth.read_bytes() == source_auth.read_bytes()
+        observed["copied_auth"] = copied_auth
+        copied_auth.write_bytes(b"rotated-synthetic-auth")
         return _CompletedProcess(command, kwargs, response)
 
     monkeypatch.setenv("CODEX_HOME", str(source_home))
@@ -239,7 +607,7 @@ def test_isolated_home_uses_and_removes_only_the_temporary_auth_hardlink(
     )
 
     assert advice.action == "maintain"
-    assert not observed["linked_auth"].exists()
+    assert not observed["copied_auth"].exists()
     assert hashlib.sha256(source_auth.read_bytes()).hexdigest() == original_hash
 
 
@@ -377,3 +745,164 @@ def test_windows_timeout_kills_descendant_before_late_write(tmp_path: Path) -> N
         if len(row) > 1 and row[1].isdigit()
     }
     assert child_pid not in listed_pids
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows orphan cleanup contract")
+def test_windows_process_snapshot_reports_current_process() -> None:
+    import codex_cli_analyzer
+
+    process_parents = codex_cli_analyzer._windows_process_parents()
+
+    assert os.getpid() in process_parents
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows orphan cleanup contract")
+def test_windows_orphan_reaper_skips_pid_reused_before_handle_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import codex_cli_analyzer
+
+    root_pid, child_pid, unrelated_pid = 900_001, 900_002, 900_003
+    snapshots = iter(
+        [
+            {child_pid: root_pid, unrelated_pid: 1},
+            {child_pid: unrelated_pid, unrelated_pid: 1},
+        ]
+    )
+    opened: list[int] = []
+    closed: list[str] = []
+    terminated: list[str] = []
+
+    class ExitedProcess:
+        pid = root_pid
+
+        def poll(self) -> int:
+            return 0
+
+    monkeypatch.setattr(
+        codex_cli_analyzer,
+        "_windows_process_parents",
+        lambda: next(snapshots),
+    )
+    monkeypatch.setattr(
+        codex_cli_analyzer,
+        "_open_process_termination_handle",
+        lambda pid: opened.append(pid) or "pinned-handle",
+    )
+    monkeypatch.setattr(
+        codex_cli_analyzer,
+        "_close_process_handle",
+        closed.append,
+    )
+    monkeypatch.setattr(
+        codex_cli_analyzer,
+        "_terminate_process_handle",
+        lambda handle, deadline: terminated.append(handle) or True,
+    )
+
+    codex_cli_analyzer._terminate_orphaned_descendants(
+        ExitedProcess(), time.monotonic() + 2
+    )
+
+    assert opened == [child_pid]
+    assert closed == ["pinned-handle"]
+    assert terminated == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows orphan cleanup contract")
+def test_windows_completed_cli_reaps_only_its_orphaned_descendants(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import codex_cli_analyzer
+
+    child_pid_file = tmp_path / "child.pid"
+    unrelated_pid_file = tmp_path / "unrelated.pid"
+    child_program = (
+        "import os,pathlib,time; "
+        f"pathlib.Path({str(child_pid_file)!r}).write_text(str(os.getpid())); "
+        "time.sleep(60)"
+    )
+    unrelated_program = (
+        "import os,pathlib,time; "
+        f"pathlib.Path({str(unrelated_pid_file)!r}).write_text(str(os.getpid())); "
+        "time.sleep(60)"
+    )
+    taskkill = str(
+        Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
+    )
+    child = subprocess.Popen([sys.executable, "-c", child_program], shell=False)
+    unrelated = subprocess.Popen([sys.executable, "-c", unrelated_program], shell=False)
+    root_pid = 0xFFFFFFFE
+    root_exited = [False]
+    process_parents = {root_pid - 1: root_pid, root_pid - 2: root_pid - 1, 0: 1}
+
+    def is_running(pid: int) -> bool:
+        result = subprocess.run(
+            ["tasklist.exe", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            shell=False,
+        )
+        import csv
+
+        return any(
+            len(row) > 1 and row[1].isdigit() and int(row[1]) == pid
+            for row in csv.reader(result.stdout.splitlines())
+        )
+
+    try:
+        deadline = time.monotonic() + 5
+        while (
+            (not child_pid_file.exists() or not unrelated_pid_file.exists())
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.02)
+        assert child_pid_file.exists()
+        child_pid = int(child_pid_file.read_text(encoding="utf-8"))
+        unrelated_pid = int(unrelated_pid_file.read_text(encoding="utf-8"))
+        process_parents = {root_pid - 1: root_pid, root_pid - 2: root_pid - 1, unrelated_pid: 1}
+
+        class CompletedCodexProcess:
+            def __init__(self, pid: int, exited: list[bool]) -> None:
+                self.pid = pid
+                self._exited = exited
+
+            def poll(self) -> int | None:
+                return 0 if self._exited[0] else None
+
+        monkeypatch.setattr(
+            codex_cli_analyzer,
+            "_windows_process_parents",
+            lambda: dict(process_parents),
+        )
+        process = CompletedCodexProcess(root_pid, root_exited)
+        codex_cli_analyzer._terminate_orphaned_descendants(process, deadline)
+        assert is_running(child_pid)
+
+        root_exited[0] = True
+        process_parents = {child_pid: root_pid, unrelated_pid: 1}
+        codex_cli_analyzer._terminate_orphaned_descendants(process, time.monotonic() + 5)
+        assert not is_running(child_pid)
+        assert is_running(unrelated_pid)
+    finally:
+        for pid in (
+            int(child_pid_file.read_text(encoding="utf-8"))
+            if child_pid_file.exists()
+            else child.pid,
+            int(unrelated_pid_file.read_text(encoding="utf-8"))
+            if unrelated_pid_file.exists()
+            else unrelated.pid,
+        ):
+            subprocess.run(
+                [taskkill, "/PID", str(pid), "/T", "/F"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+                shell=False,
+            )
+        child_pid_file.unlink(missing_ok=True)

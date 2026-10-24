@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "decision_time_utc": "2026-10-03T12:00:00Z",
+  "portfolio": {
+    "quote": "USDT",
+    "balances": [
+      {"asset": "BTC", "free": 0.01, "locked": 0.0},
+      {"asset": "USDT", "free": 1000.0, "locked": 0.0}
+    ],
+    "prices": {
+      "BTCUSDT": 50000.0,
+      "ETHUSDT": 3000.0,
+      "SOLUSDT": 100.0,
+      "BNBUSDT": 600.0,
+      "AVAXUSDT": 30.0,
+      "ADAUSDT": 1.0
+    },
+    "filters": {
+      "BTCUSDT": {"lot_step": 0.00001, "min_qty": 0.00001},
+      "ETHUSDT": {"lot_step": 0.0001, "min_qty": 0.0001},
+      "SOLUSDT": {"lot_step": 0.01, "min_qty": 0.01},
+      "BNBUSDT": {"lot_step": 0.001, "min_qty": 0.001},
+      "AVAXUSDT": {"lot_step": 0.01, "min_qty": 0.01},
+      "ADAUSDT": {"lot_step": 1.0, "min_qty": 1.0}
+    },
+    "min_notional": 5.0,
+    "max_slippage": 0.003,
+    "drift": 0.01
+  },
+  "moderate_targets": {
+    "BTC": 0.4,
+    "ETH": 0.2,
+    "SOL": 0.15,
+    "USDT": 0.15,
+    "BNB": 0.03333333333333333,
+    "AVAX": 0.03333333333333333,
+    "ADA": 0.03333333333333333
+  },
+  "cases": [
+    {
+      "id": "maintain_no_actionable_drift",
+      "adaptive": false,
+      "proposed_targets": {"BTC": 0.3333333333333333, "USDT": 0.6666666666666667},
+      "macro": "missing",
+      "advice": {"action": "maintain", "targets": {"BTC": 0.3333333333333333, "USDT": 0.6666666666666667}, "rationale": "fixed synthetic maintain"},
+      "expected": {"status": "skipped", "order_symbols": [], "action": "maintain"}
+    },
+    {
+      "id": "redistribute_clamped_by_guardrails",
+      "adaptive": false,
+      "proposed_targets": {"BTC": 0.3333333333333333, "USDT": 0.6666666666666667},
+      "macro": "missing",
+      "advice": {"action": "redistribute", "targets": {"BTC": 0.4, "USDT": 0.6}, "rationale": "fixed synthetic redistribute"},
+      "expected": {"status": "completed", "order_symbols": ["BTCUSDT"], "order_side": "BUY", "order_quantity": 0.00149, "action": "redistribute", "targets": {"BTC": 0.3833333333333333, "USDT": 0.6166666666666667}}
+    },
+    {
+      "id": "codex_failure_exact_deterministic_fallback",
+      "adaptive": false,
+      "proposed_targets": {"BTC": 0.1, "USDT": 0.9},
+      "macro": "missing",
+      "advice": {"failure": "timeout"},
+      "expected": {"status": "completed", "order_symbols": ["BTCUSDT"], "order_side": "SELL", "order_quantity": 0.00699, "action": "redistribute", "targets": {"BTC": 0.1, "USDT": 0.9}}
+    },
+    {
+      "id": "missing_macro_preserves_base_targets",
+      "adaptive": true,
+      "proposed_targets": null,
+      "macro": "missing",
+      "advice": {"action": "maintain", "targets": "moderate_targets", "rationale": "fixed synthetic maintain"},
+      "expected": {"status": "completed", "profile": "moderate", "action": "maintain", "proposed_targets": {"BTC": 0.4, "ETH": 0.2, "SOL": 0.15, "USDT": 0.15, "BNB": 0.03333333333333333, "AVAX": 0.03333333333333333, "ADA": 0.03333333333333333}, "targets": {"BTC": 0.4, "ETH": 0.2, "SOL": 0.15, "USDT": 0.15, "BNB": 0.03333333333333333, "AVAX": 0.03333333333333333, "ADA": 0.03333333333333333}, "orders": [{"symbol": "ETHUSDT", "side": "BUY", "quantity": 0.0999}, {"symbol": "BNBUSDT", "side": "BUY", "quantity": 0.083}, {"symbol": "ADAUSDT", "side": "BUY", "quantity": 49.0}, {"symbol": "AVAXUSDT", "side": "BUY", "quantity": 1.66}, {"symbol": "BTCUSDT", "side": "BUY", "quantity": 0.00199}, {"symbol": "SOLUSDT", "side": "BUY", "quantity": 2.24}], "adaptive_status": "warning", "adaptive_detail": "required source is not fresh", "maintain_overridden": true}
+    },
+    {
+      "id": "btc_15m_boundary_is_accepted",
+      "adaptive": true,
+      "proposed_targets": null,
+      "macro": "btc_15m",
+      "advice": {"action": "maintain", "targets": "moderate_targets", "rationale": "fixed synthetic maintain"},
+      "expected": {"status": "completed", "profile": "moderate", "action": "maintain", "proposed_targets": {"BTC": 0.4004, "ETH": 0.2002, "SOL": 0.1502, "USDT": 0.1502, "BNB": 0.033, "AVAX": 0.033, "ADA": 0.033}, "targets": {"BTC": 0.4, "ETH": 0.2, "SOL": 0.15, "USDT": 0.15, "BNB": 0.03333333333333333, "AVAX": 0.03333333333333333, "ADA": 0.03333333333333333}, "orders": [{"symbol": "ETHUSDT", "side": "BUY", "quantity": 0.0999}, {"symbol": "BNBUSDT", "side": "BUY", "quantity": 0.083}, {"symbol": "ADAUSDT", "side": "BUY", "quantity": 49.0}, {"symbol": "AVAXUSDT", "side": "BUY", "quantity": 1.66}, {"symbol": "BTCUSDT", "side": "BUY", "quantity": 0.00199}, {"symbol": "SOLUSDT", "side": "BUY", "quantity": 2.24}], "adaptive_status": "info", "adaptive_detail": "source_quality=full", "btc_age_seconds": "btc_age_seconds=900.000"}
+    },
+    {
+      "id": "btc_16m_falls_back_to_base_targets",
+      "adaptive": true,
+      "proposed_targets": null,
+      "macro": "btc_16m",
+      "advice": {"action": "redistribute", "targets": {"BTC": 0.43, "ETH": 0.2, "SOL": 0.15, "USDT": 0.12, "BNB": 0.03333333333333333, "AVAX": 0.03333333333333333, "ADA": 0.03333333333333333}, "rationale": "fixed synthetic stale-source case"},
+      "expected": {"status": "completed", "profile": "moderate", "action": "redistribute", "proposed_targets": {"BTC": 0.4, "ETH": 0.2, "SOL": 0.15, "USDT": 0.15, "BNB": 0.03333333333333333, "AVAX": 0.03333333333333333, "ADA": 0.03333333333333333}, "targets": {"BTC": 0.43, "ETH": 0.2, "SOL": 0.15, "USDT": 0.12, "BNB": 0.03333333333333333, "AVAX": 0.03333333333333333, "ADA": 0.03333333333333333}, "orders": [{"symbol": "ETHUSDT", "side": "BUY", "quantity": 0.1}, {"symbol": "BNBUSDT", "side": "BUY", "quantity": 0.083}, {"symbol": "ADAUSDT", "side": "BUY", "quantity": 50.0}, {"symbol": "AVAXUSDT", "side": "BUY", "quantity": 1.66}, {"symbol": "BTCUSDT", "side": "BUY", "quantity": 0.0029}, {"symbol": "SOLUSDT", "side": "BUY", "quantity": 2.25}], "adaptive_status": "warning", "adaptive_detail": "outside 0..15m", "btc_age_seconds": "btc_age_seconds=960.000"}
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Análises por Codex CLI local — proposta de nova versão
 
-Data: 2026-10-21. Estado: planejamento solicitado; implementação e ativação pendentes.
+Data: 2026-10-24. Estado: TASK-053/054/055 implementadas; TASK-056 aceita em contexto sintético após correção de limpeza; ativação TASK-057 pendente de aprovação operacional específica.
 
 ## Objetivo e escopo
 
@@ -30,10 +30,10 @@ O pedido desta etapa é planejar a onda. Não executar inferência, rebalanceame
 - Criar `AI_PROVIDER=codex_cli|openrouter|off`. Durante implementação, ausência da variável conserva o comportamento legado; um launcher candidato seleciona explicitamente `codex_cli`. A mudança do launcher de produção pertence somente à ativação aprovada.
 - Modelo `gpt-6-luna` e esforço `medium` são constantes da versão candidata. Não trocar silenciosamente por outro modelo, esforço ou provedor.
 - `CODEX_CLI_EXECUTABLE` opcional configura o executável; ausência usa descoberta de `codex` no PATH. Falha de descoberta é diagnosticada. Não instalar nem atualizar o CLI automaticamente.
-- `CODEX_CLI_TIMEOUT_SECONDS` inteiro positivo, padrão 120, máximo 300. Uma invocação por análise, sem retry automático. Orçamento inclui inicialização, saída e encerramento da árvore do processo. Timeout retorna o fallback determinístico existente e diagnóstico sanitizado.
+- `CODEX_CLI_TIMEOUT_SECONDS` inteiro positivo, padrão 120, máximo 300. Uma invocação de modelo por análise, sem retry automático de inferência. Orçamento inclui inicialização, saída e encerramento da árvore do processo. Após o processo Codex encerrar, no Windows enumerar descendentes, fixar handles e revalidar ancestralidade antes de encerrar somente os descendentes verificados e ler/limpar o workspace. Retry de cleanup usa backoff limitado pela deadline absoluta. Timeout retorna o fallback determinístico existente e diagnóstico sanitizado.
 - Entrada preserva o contexto atual necessário à análise, sem ampliar os dados de conta enviados. Segredos Binance/OpenRouter nunca entram no prompt, argumentos, ambiente herdado ou diagnóstico do subprocesso.
-- Prompt por stdin, argumentos como lista e `shell=False`; diretório temporário exclusivo por chamada fora do repositório, saída final em arquivo exclusivo, schema explícito e limpeza em sucesso/falha. Não interpretar JSONL de eventos como resposta da análise.
-- Usar autenticação já disponível ao CLI. Não copiar `auth.json`, criar chaves, mudar rotas globais ou imprimir tokens. Validar acesso sob a identidade real do Agendador antes do corte; a sessão interativa não comprova isso.
+- Prompt por stdin, argumentos como lista e `shell=False`; diretório temporário exclusivo por chamada fora do repositório, saída final em arquivo exclusivo, schema explícito e limpeza em sucesso/falha. Em Windows, se Git ou outro descendente sobreviver ao processo raiz, colher somente os descendentes ativos da invocação depois que ela terminar; nunca terminar processos por nome ou localização. Retry de cleanup apenas para sharing/lock, com backoff limitado pela deadline absoluta. Não interpretar JSONL de eventos como resposta da análise.
+- Usar autenticação já disponível ao CLI. Por decisão explícita do usuário em 2026-10-21, copiar `auth.json` apenas para o diretório temporário com DACL restrita da inferência, preservando a fonte e removendo a cópia ao terminar. Não criar chaves, mudar rotas globais ou imprimir tokens. Validar acesso sob a identidade real do Agendador antes do corte; a sessão interativa não comprova isso. A cópia aumenta a exposição local transitória do segredo e não prova acesso da tarefa agendada.
 - Isolar configuração herdada e impedir ferramentas, MCP, plugins, hooks e instruções do projeto durante a análise. `read-only` sozinho não comprova ausência de acesso a segredos. TASK-053 deve estabelecer e testar o mecanismo suportado pela versão instalada; se não for possível, a integração fica bloqueada antes de qualquer inferência. Não usar flags de bypass nem contornar política do executor.
 - Pedir objeto com `action` em `maintain|redistribute`, `targets` com os símbolos da proposta e `rationale` textual limitada a 2.000 caracteres. Gerar schema para os símbolos da chamada com campos obrigatórios e propriedades adicionais proibidas. Todos os pesos devem ser números finitos, não negativos e com soma positiva; rejeitar booleanos, símbolos extras, JSON vazio/truncado e resposta acima de 64 KiB. Aplicar os guardrails existentes e normalização somente após validação.
 - Preservar semântica existente: falha técnica devolve os pesos propostos pelo algoritmo e ação `redistribute`. Isso pode permitir operações determinísticas se a execução já for live; não significa pausar trading. Mudar essa política seria uma decisão de estratégia separada.
@@ -51,7 +51,7 @@ Não prometer que o clamp pré-normalização equivale a um limite final absolut
 - Testes offline demonstram Luna/médio explícitos, isolamento, parsing estrito, deadline/limpeza e fallback sem OpenRouter.
 - Integração preserva conselho, `maintain`, guardrails, auditoria e chamadas simuladas de execução.
 - Replay usa entradas sintéticas ou sanitizadas, com preços/filtros congelados e comparação ao baseline determinístico; divergência de conselho não é prova de melhora financeira.
-- Smoke real restrito a contexto sintético comprova CLI, autenticação, modelo e contrato. Seu lançamento fica para a execução aprovada, após isolamento comprovado; nesta etapa não ocorreu chamada ao modelo.
+- Smoke real restrito a contexto sintético comprova CLI, autenticação disponível nesta sessão e contrato de resposta para o modelo solicitado. Três chamadas consecutivas foram aceitas após a correção. O CLI não expõe identidade efetiva independente do modelo solicitado; PATH/auth efetivos do Agendador seguem sem verificação e pertencem ao gate de TASK-057.
 - Ativação exige aceite dos resultados, backup de launcher/configuração/tarefa quando aplicável, rollback e observação de um ciclo na identidade agendada. Produção e operações live exigem autorização explícita.
 
 ## Pendências verificáveis

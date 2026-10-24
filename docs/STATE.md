@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-10-21.
+Last updated: 2026-10-24.
 
 ## Purpose
 
@@ -21,10 +21,11 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 ## Current Work
 
 - Planning request: replace OpenRouter analysis with local Codex CLI, exactly `gpt-6-luna` / `medium`. TASK-052 documents the design and implementation wave in `docs/superpowers/specs/2026-10-21-codex-cli-analysis-design.md` and `docs/superpowers/plans/2026-10-21-codex-cli-analysis.md`.
-- User approved implementing the saved wave. TASK-053 completed in commit `b00f295`; TASK-054 completed offline in `5b64027`; TASK-055 integration passed independent audit and is complete pending commit.
-- TASK-055 focused checks: 47 passed, 1 known baseline test deselected; full suite: 334 passed, 7 baseline failures. No inference, launcher execution, or live exchange activity. Codex failure preserves exact deterministic proposed weights; TASK-056 remains the real-inference gate.
+- User approved implementing the saved wave. TASK-053 completed in `b00f295`; TASK-054 completed offline in `5b64027`; TASK-055 completed and independently audited in `299cd4e`.
+- User authorized as many isolated synthetic TASK-056 inferences as needed, without per-call confirmation; scope is fixed synthetic context and sanitized diagnostics using Luna/medium. This excludes scheduler changes, live Binance/Earn, and TASK-057 production activation, which still needs its own concrete rollout approval. Root cause confirmed: Git for Windows descendants of `codex exec` retained temp files after the CLI exited (Restart Manager found Git in all 5 observed cleanup failures). Reaper now pins and revalidates descendant process handles, then terminates only those descendants before cleanup. Three consecutive synthetic inferences were accepted; 12 descendants terminated, zero busy cleanup errors. Focused replay/adapter/launcher -> 46 passed; full suite -> 367 passed and 7 known baseline failures. Production remains unchanged at `fe37b5d`. This authorization supersedes older notes below that say no further inference was authorized.
+- The stdin-based sanitized wrapper passed stub-only success and exception tests; it reports acceptance/failure code or exception class, never rationale or exception text. Continuous synthetic-call authorization is recorded in `docs/codex-cli-analysis.md` and TASK-056; old “no further inference” notes are superseded. TASK-057 still needs separate rollout approval.
 - TASK-054 RED was confirmed (missing module); focused verification -> 62 passed. Full suite -> 315 passed, 7 unrelated baseline failures. Workdir is pinned outside the user profile at `%SystemRoot%\Temp`; matching `debug prompt-input` preflight found no global AGENTS marker. No real model call.
-- Unproven: mutable auth hard link, effective managed policy, complete real Codex API-vs-tool/network boundary, and Task Scheduler identity. This task validates controls passed to a fake and uses a harmless local helper only; real inference is deferred to TASK-056. Production activation requires separate explicit approval.
+- Still unproven: effective managed model identity/policy, complete real Codex API-vs-tool/network boundary, and Task Scheduler PATH/auth access. The CLI accepted structured output for the requested `gpt-6-luna` / medium, but did not expose an independent effective-model identity. Production activation remains blocked pending exact TASK-057 review.
 - A prior MCP inventory command surfaced credential values in tool output. Do not repeat or store them; rotate potentially exposed affected credentials outside this implementation flow. No credentials were persisted and no rotation was performed.
 - Goal: make adaptive `btc_24h` freshness fallbacks diagnosable without changing strategy behavior.
 - `TASK-051-audit-adaptive-btc-source-age` completed: audit details now record UTC collection/decision times and signed BTC source age for adaptive applied, fallback, and calculation-failure outcomes.
@@ -84,7 +85,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 ## Current Goal
 
-- Latest user objective: plan the Codex CLI analysis version; implementation is pending. Earlier adaptive-source observation below remains an operational follow-up, not permission to change its strategy.
+- Latest user objective: implement and diagnose the Codex CLI analysis version. TASK-053 through TASK-056 are complete; TASK-057 rollout remains pending its separate concrete approval. Earlier adaptive-source observation below remains an operational follow-up, not permission to change its strategy.
+- Active card: none for this wave; TASK-056 is complete in `workflow/kanban/05_done/`. No production activation, scheduled-task change, or live Binance/Earn operation is authorized by synthetic-call authorization.
 - Goal: observe the next scheduled adaptive run using the new BTC source-timing audit fields.
 - Decision: keep the 0..15 minute BTC freshness gate and base-profile fallback unchanged; do not change schedule or live allocation automatically.
 - Active card: none. `TASK-051-audit-adaptive-btc-source-age` is complete; see its kanban card for test and commit evidence.
