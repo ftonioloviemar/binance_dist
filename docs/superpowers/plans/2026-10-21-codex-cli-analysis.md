@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Execução aprovada: TASK-053/054/055 concluídas nos commits `b00f295`, `5b64027` e `299cd4e`; TASK-056 está em `07_needs_human`; TASK-057 segue em `00_pending_approval` até TASK-056 aceitar e receber autorização operacional específica.
+- Execução aprovada: TASK-053/054/055 concluídas nos commits `b00f295`, `5b64027` e `299cd4e`; TASK-056 está concluída em `05_done`; TASK-057 está em `03_doing` com autorização operacional recebida em 2026-10-24.
 - `gpt-6-luna`, `model_reasoning_effort="medium"`; nenhuma substituição automática.
 - Uma chamada; timeout padrão 120 s, máximo 300 s; saída até 64 KiB; rationale até 2.000 caracteres.
 - O usuário autorizou chamadas sintéticas de TASK-056 sem limite de quantidade para diagnóstico/aceitação, sem confirmação por chamada. Nenhuma operação live, mudança global Codex ou alteração da tarefa agendada está autorizada.
@@ -85,11 +85,11 @@
 
 **Depends:** TASK-056 aceita; autorização explícita do usuário para corte de produção. É uma aprovação operacional distinta da execução de código.
 
-- [ ] Apresentar diff concreto de configuração/launcher, resultados e exposição ao fallback determinístico; obter autorização antes de aplicá-lo.
-- [ ] Verificar disco; copiar arquivos operacionais tocados e exportar tarefa somente se houver mudança dela. Registrar hashes e comando real de restauração, sem segredos. Manter tarefa/agenda existente se não precisar mudar.
-- [ ] Selecionar `AI_PROVIDER=codex_cli` explicitamente em produção; não remover chave OpenRouter nem o adaptador legado neste corte. Preservar modelo/esforço fixos.
+- [x] Apresentar diff concreto de configuração/launcher, resultados e exposição ao fallback determinístico; obter autorização antes de aplicá-lo. Autorização explícita recebida em 2026-10-24.
+- [ ] Verificar disco; criar template de rollback do `.env` sem credenciais e registrar seu SHA-256 original sem valores. Não tocar launcher/tarefa; manter agenda existente.
+- [ ] Selecionar `AI_PROVIDER=codex_cli` explicitamente em produção e remover `OPENROUTER_API_KEY` do `.env`; o usuário desativará a chave exposta no Chrome. Não criar chave substituta agora. Preservar modelo/esforço fixos.
 - [ ] Observar um ciclo agendado autorizado: provedor/modelo/esforço corretos, tempo dentro do orçamento, nenhuma curadoria OpenRouter, auditoria e resultado visível estáveis. Não disparar manualmente trading para validar.
-- [ ] Em falha, restaurar exatamente launcher/configuração anteriores, após confirmar hashes; rollback não desfaz ordens já executadas. Registrar resultado e aprovação do retorno antes de encerrar.
+- [ ] Em falha, restaurar o código/configuração anteriores após confirmar hashes; rollback não desfaz operações já executadas. Como a chave foi desativada e removida, se OpenRouter for necessário, criar e instalar uma nova chave antes do próximo ciclo. Registrar resultado e aprovação do retorno antes de encerrar.
 - [ ] Executar verificações específicas do launcher, `git diff --check`, auditoria independente e commit apenas de arquivos versionados. Segredos/backups permanecem fora do Git.
 
 ## Fechamento e continuidade
