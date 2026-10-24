@@ -88,7 +88,7 @@
 - [x] Apresentar diff concreto de configuração/launcher, resultados e exposição ao fallback determinístico; obter autorização antes de aplicá-lo. Autorização explícita recebida em 2026-10-24.
 - [x] Verificar disco; criar template de rollback do `.env` sem credenciais e registrar hashes sem valores. Backup restrito e fora do Git; tarefa/agendamento não foram tocados.
 - [x] Selecionar `AI_PROVIDER=codex_cli` explicitamente em produção e remover `OPENROUTER_API_KEY` do `.env`; validação local confirmou provider `codex_cli`, chave ausente e sem modelos OpenRouter carregados. Não criar chave substituta agora. Preservar modelo/esforço fixos.
-- [ ] Usuário clicar `Disable` para a chave exposta correta em OpenRouter e concluir eventual confirmação do site; não escolher `Delete`.
+- [x] Usuário desativou a chave exposta correta em OpenRouter. Confirmação na UI: ação disponível agora é `Enable`. Nenhuma chave nova criada.
 - [ ] Observar um ciclo agendado autorizado: provedor/modelo/esforço corretos, tempo dentro do orçamento, nenhuma curadoria OpenRouter, auditoria e resultado visível estáveis. Não disparar manualmente trading para validar.
 - [ ] Em falha, restaurar o código/configuração anteriores após confirmar hashes; rollback não desfaz operações já executadas. Como a chave foi desativada e removida, se OpenRouter for necessário, criar e instalar uma nova chave antes do próximo ciclo. Registrar resultado e aprovação do retorno antes de encerrar.
 - [ ] Executar verificações específicas do launcher, `git diff --check`, auditoria independente e commit apenas de arquivos versionados. Segredos/backups permanecem fora do Git.
