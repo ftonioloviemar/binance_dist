@@ -91,7 +91,7 @@
 - [x] Usuário desativou a chave exposta correta em OpenRouter. Confirmação na UI: ação disponível agora é `Enable`. Nenhuma chave nova criada.
 - [ ] Observar um ciclo agendado autorizado: provedor/modelo/esforço corretos, tempo dentro do orçamento, nenhuma curadoria OpenRouter, auditoria e resultado visível estáveis. Não disparar manualmente trading para validar.
 - [ ] Em falha, restaurar o código/configuração anteriores após confirmar hashes; rollback não desfaz operações já executadas. Como a chave foi desativada e removida, se OpenRouter for necessário, criar e instalar uma nova chave antes do próximo ciclo. Registrar resultado e aprovação do retorno antes de encerrar.
-- [ ] Executar verificações específicas do launcher, `git diff --check`, auditoria independente e commit apenas de arquivos versionados. Segredos/backups permanecem fora do Git.
+- [x] Executar teste específico do launcher de produção (`tests/test_run_prod_launcher.py` -> 1 passou), `git diff --check` e auditoria independente (aprovada após correção menor); commitar apenas arquivos versionados. Segredos/backups permanecem fora do Git.
 
 ## Fechamento e continuidade
 
