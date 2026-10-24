@@ -15,7 +15,7 @@
 - Execução aprovada: TASK-053/054/055 concluídas nos commits `b00f295`, `5b64027` e `299cd4e`; TASK-056 está concluída em `05_done`; TASK-057 está em `03_doing` com autorização operacional recebida em 2026-10-24.
 - `gpt-6-luna`, `model_reasoning_effort="medium"`; nenhuma substituição automática.
 - Uma chamada; timeout padrão 120 s, máximo 300 s; saída até 64 KiB; rationale até 2.000 caracteres.
-- O usuário autorizou chamadas sintéticas de TASK-056 sem limite de quantidade para diagnóstico/aceitação, sem confirmação por chamada. Nenhuma operação live, mudança global Codex ou alteração da tarefa agendada está autorizada.
+- O usuário autorizou chamadas sintéticas de TASK-056 sem limite de quantidade para diagnóstico/aceitação, sem confirmação por chamada. Em 2026-10-24, autorizou separadamente o corte de produção e a observação do próximo ciclo live agendado; isso não autoriza disparo manual, mudança global do Codex ou alteração da tarefa agendada.
 - Antes de cada cartão, recuperar contexto, verificar disco e preservar backup/rollback; preservar mudanças de outras sessões.
 - TDD RED → implementação mínima → GREEN → auditoria independente → commit por cartão.
 - Especialista de contrato em contexto limpo antes de cada implementação não trivial e outro especialista para auditar o resultado; coordenador valida ambos conforme `docs/subagent-specialist-matrix.md` e `docs/model-selection.md`.
@@ -86,8 +86,9 @@
 **Depends:** TASK-056 aceita; autorização explícita do usuário para corte de produção. É uma aprovação operacional distinta da execução de código.
 
 - [x] Apresentar diff concreto de configuração/launcher, resultados e exposição ao fallback determinístico; obter autorização antes de aplicá-lo. Autorização explícita recebida em 2026-10-24.
-- [ ] Verificar disco; criar template de rollback do `.env` sem credenciais e registrar seu SHA-256 original sem valores. Não tocar launcher/tarefa; manter agenda existente.
-- [ ] Selecionar `AI_PROVIDER=codex_cli` explicitamente em produção e remover `OPENROUTER_API_KEY` do `.env`; o usuário desativará a chave exposta no Chrome. Não criar chave substituta agora. Preservar modelo/esforço fixos.
+- [x] Verificar disco; criar template de rollback do `.env` sem credenciais e registrar hashes sem valores. Backup restrito e fora do Git; tarefa/agendamento não foram tocados.
+- [x] Selecionar `AI_PROVIDER=codex_cli` explicitamente em produção e remover `OPENROUTER_API_KEY` do `.env`; validação local confirmou provider `codex_cli`, chave ausente e sem modelos OpenRouter carregados. Não criar chave substituta agora. Preservar modelo/esforço fixos.
+- [ ] Usuário clicar `Disable` para a chave exposta correta em OpenRouter e concluir eventual confirmação do site; não escolher `Delete`.
 - [ ] Observar um ciclo agendado autorizado: provedor/modelo/esforço corretos, tempo dentro do orçamento, nenhuma curadoria OpenRouter, auditoria e resultado visível estáveis. Não disparar manualmente trading para validar.
 - [ ] Em falha, restaurar o código/configuração anteriores após confirmar hashes; rollback não desfaz operações já executadas. Como a chave foi desativada e removida, se OpenRouter for necessário, criar e instalar uma nova chave antes do próximo ciclo. Registrar resultado e aprovação do retorno antes de encerrar.
 - [ ] Executar verificações específicas do launcher, `git diff --check`, auditoria independente e commit apenas de arquivos versionados. Segredos/backups permanecem fora do Git.
