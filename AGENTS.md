@@ -18,9 +18,10 @@ These rules apply to agents and tools working in this repository.
 - Use `docs/STATE.md` as the short current-state and handoff file for native Codex compaction or new chats.
 - Use `CONTEXT.md` for stable trading/domain terminology. Do not put workflow terms there.
 - Use `SKILLS.md` as the local skill catalog and trigger map.
-- For behavior changes, follow TDD: failing test first, minimal implementation, verification, then refactor.
-- For non-trivial TDD cards, use a clean-context specialist subagent to define or validate the test contract before implementation and a separate specialist to audit results before closing.
-- For other repeated task types, use reusable specialist subagents only when `docs/subagent-specialist-matrix.md` predicts precision/context/cost gain. Prefer the cheapest adequate model/reasoning class, but do not downshift when it would create rework or trading risk.
+- For every user-requested plan, follow the Plan -> Goal -> independent review policy in `docs/project-continuity.md` and its model assignments in `docs/model-selection.md`. Preserve explicit plan-only requests and safety/approval gates.
+- For behavior changes, follow TDD: a clean-context `gpt-6.1-terra`/medium test-specialist subagent authors the tests; `gpt-6-luna`/medium runs RED, GREEN and regression tests; then refactor. Follow the availability, isolation and safety rules in `docs/project-continuity.md`.
+- For non-trivial TDD cards, use an independent specialist to audit results before closing; do not let the test author or implementer serve as the independent end-of-Goal reviewer.
+- For other repeated task types, use reusable specialist subagents only when `docs/subagent-specialist-matrix.md` predicts precision/context/cost gain, except for the independent end-of-Goal review required by the Plan -> Goal policy. Do not downshift when it would create rework or trading risk.
 - Keep work in small cards that can be verified and committed independently.
 - When a card is done, move the file to the matching kanban state directory; editing status text is not enough.
 - Commit every completed card before starting the next one, unless the user explicitly asks to hold commits. If prior work was accumulated before this rule, make a clearly described catch-up commit and then resume one-commit-per-card.

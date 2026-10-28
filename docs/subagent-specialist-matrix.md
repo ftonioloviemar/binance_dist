@@ -10,7 +10,7 @@ Use the rule as **maximum useful delegation**, not maximum possible delegation. 
 
 ## Core Rule
 
-Dispatch a subagent only when all are true:
+Except for the mandatory TDD test-author subagent and independent review of an authorized Plan -> Goal effort in `docs/project-continuity.md`, dispatch a subagent only when all are true:
 
 - The task has a clear card, question, or review target.
 - The expected output can be judged objectively.
@@ -18,7 +18,7 @@ Dispatch a subagent only when all are true:
 - The subagent has a disjoint responsibility or independent review angle.
 - The coordinator can cheaply verify the output.
 
-Do not dispatch a subagent when any are true:
+For other subagent uses, do not dispatch a subagent when any are true:
 
 - The work is a tiny docs edit or one-line mechanical change.
 - The main blocker is a human decision.
@@ -28,7 +28,7 @@ Do not dispatch a subagent when any are true:
 
 ## Model Classes
 
-Use classes first; map them to actual available models in the current environment.
+For TDD test authoring, TDD test execution and Plan -> Goal independent review, use the explicit model/effort assignments in `docs/model-selection.md`. For other roles, use classes first and map them to actual available models in the current environment.
 
 - **Cheap bounded**: cheapest available model that follows instructions reliably. Use for read-only summaries, checklist review, simple card drafting, and focused diff review.
 - **Standard specialist**: low-cost model with enough reasoning for test contracts, bug triage, and audit review. Current default suggestion: `gpt-5.4-mini` with `medium` reasoning for bounded tasks.
@@ -41,8 +41,10 @@ If a cheap subagent creates rework twice for the same task type, promote that sp
 
 | Task type | Specialist | Default model class | Reasoning | Use when | Avoid when |
 |---|---|---:|---:|---|---|
-| TDD implementation card | Test-contract reviewer | Standard specialist | medium | Behavior change needs RED contract before code | Test is trivial and obvious |
+| TDD test author | Test-specialist subagent | `gpt-6.1-terra` | medium | Every TDD task: define contract and write tests before production code | Never silently skip; report if unavailable |
+| TDD test execution | Confirmed coordinator or test-runner subagent | `gpt-6-luna` | medium | Run RED, GREEN and regressions with appropriate test/verification skills | Never silently substitute; report if unavailable |
 | TDD completion | Result auditor | Standard specialist | medium | Diff/tests need independent check before `05_done` | Docs-only card |
+| Plan -> Goal completion | Independent review subagent | `gpt-6.1-terra` | medium | Every authorized Plan -> Goal execution; up to three review rounds | Never silently skip; report if unavailable |
 | Bug/regression | Diagnose investigator | Standard specialist, promote if hard | medium/high | Need reproduce/minimize/hypothesize loop | Existing failing test already localizes cause |
 | Strategy/trading decision | Grill/domain challenger | Strong specialist or coordinator-only | high | Terms, risks, or allocation behavior are fuzzy | Decision is already selected and documented |
 | Architecture/refactor | Architecture reviewer | Strong specialist | high | User asks to improve architecture/testability | Small localized bugfix |
@@ -78,7 +80,7 @@ Recalibrate:
 - Demote model class/reasoning after repeated `too expensive`.
 - Retire or narrow a specialist if it often creates rework.
 - Add a reusable prompt template only after the same specialist pattern succeeds at least twice.
-- If one or two correction cycles do not converge, stop expanding the subagent loop; reduce scope or move the task back to coordinator/strong specialist.
+- For Plan -> Goal, follow the explicit maximum of three independent review rounds, including the first, in `docs/project-continuity.md`. Stop and report remaining valid findings after round three. For other work, if one or two correction cycles do not converge, reduce scope or move the task back to the coordinator/strong specialist.
 
 ## Parallelism Rule
 

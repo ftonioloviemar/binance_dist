@@ -2,9 +2,23 @@
 
 Use enough intelligence to avoid rework, then reduce cost where the task is bounded.
 
-## Defaults
+## Plan -> Goal -> Review Defaults
 
-- Coordinator for ambiguous strategy, trading-sensitive changes, architecture, or multi-file implementation: keep the strongest available model/reasoning.
+- Every user-requested plan: `gpt-6.1-terra` with `medium` reasoning, including a thorough grill of unresolved decisions and safety constraints.
+- Approved implementation Goal: `gpt-6-luna` with `medium` reasoning.
+- Independent end-of-Goal reviewer: separate `gpt-6.1-terra` subagent with `medium` reasoning, dispatched using `superpowers:requesting-code-review` and its reviewer template; follow the three-round maximum in `docs/project-continuity.md`.
+- The host controls the primary session model and reasoning; creating a Goal does not change either. Verify the selected model/effort for each stage. If a required selection or subagent is unavailable or cannot be verified, explain the blocker and request user selection or authorization of an alternative; never claim a silent switch or substitute.
+- A plan-only request remains plan-only, without file edits unless explicitly permitted. Execution requires authorization, and Goal creation additionally requires an explicit user request as defined by platform rules. User-selected strategy and live-trading approval gates remain mandatory.
+
+## TDD Test Defaults
+
+- Test author: a clean-context test-specialist subagent using `gpt-6.1-terra` with `medium` reasoning writes tests and the contract before production code, following `superpowers:test-driven-development`.
+- Test execution: `gpt-6-luna` with `medium` reasoning runs RED, GREEN and regression tests, either as the confirmed implementation coordinator or a scoped test-runner subagent. Use TDD and `superpowers:verification-before-completion` for evidence; use a specialized test skill only where applicable and available.
+- These assignments apply to TDD tasks regardless of the general cheapest-adequate specialist defaults. Availability, isolation, safety and no-silent-substitution rules are in `docs/project-continuity.md`.
+
+## Other Defaults
+
+- Outside the Plan -> Goal -> Review default, select a coordinator strong enough for ambiguous strategy, trading-sensitive changes, architecture, or multi-file implementation; escalate when evidence shows the selected model is insufficient.
 - Bounded review or contract tasks: use a cheaper clean-context subagent only when the task has a clear card, small scope, and objective acceptance criteria.
 - Docs-only edits with clear source material: use cheaper reasoning where available, but still verify against canonical repo docs.
 - Trading/live-funds safety, API permissions, or unclear exchange behavior: do not downshift just to save tokens.
