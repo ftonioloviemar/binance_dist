@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -195,6 +196,7 @@ def test_missing_executable_and_process_spawn_error_are_typed_fallbacks(
 ) -> None:
     import codex_cli_analyzer
 
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
     monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda name: None)
     missing = codex_cli_analyzer.analyze_with_codex(_request(), codex_cli_analyzer.CodexCliSettings())
     assert missing.model_failures[0].error_type == "executable_not_found"
@@ -908,3 +910,168 @@ def test_windows_completed_cli_reaps_only_its_orphaned_descendants(
                 shell=False,
             )
         child_pid_file.unlink(missing_ok=True)
+
+
+def _install_candidate(local_appdata: Path, version: str) -> Path:
+    candidate = local_appdata / "OpenAI" / "Codex" / "bin" / version / "codex.exe"
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.touch()
+    return candidate
+
+
+def _discovery_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, platform: str = "nt") -> list[list[str]]:
+    import codex_cli_analyzer
+
+    commands: list[list[str]] = []
+    monkeypatch.setattr(codex_cli_analyzer, "os", SimpleNamespace(name=platform, environ=os.environ))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", lambda _: None)
+    monkeypatch.setattr(codex_cli_analyzer, "_temporary_root", lambda: tmp_path)
+    monkeypatch.setattr(codex_cli_analyzer, "_copy_authentication_file", lambda _: None)
+    monkeypatch.setattr(codex_cli_analyzer, "_terminate_orphaned_descendants", lambda *args: None)
+
+    def fake_popen(command: list[str], **kwargs: object) -> _CompletedProcess:
+        assert kwargs["shell"] is False
+        commands.append(command)
+        return _CompletedProcess(command, kwargs, None, returncode=1)
+
+    monkeypatch.setattr(codex_cli_analyzer.subprocess, "Popen", fake_popen)
+    return commands
+
+
+def _assert_missing_executable(advice: object, commands: list[list[str]]) -> None:
+    assert not commands
+    assert advice.targets == _request().proposed_weights
+    assert advice.action == "redistribute"
+    assert advice.model_failures[0].error_type == "executable_not_found"
+    assert advice.model_failures[0].detail == "Codex CLI executable is unavailable."
+
+
+def test_windows_discovers_single_canonical_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import codex_cli_analyzer
+
+    commands = _discovery_environment(monkeypatch, tmp_path)
+    candidate = _install_candidate(tmp_path / "local", "opaque-version")
+    codex_cli_analyzer.analyze_with_codex(_request(), codex_cli_analyzer.CodexCliSettings())
+    assert len(commands) == 1
+    assert Path(commands[0][0]) == candidate
+
+
+@pytest.mark.parametrize("source", ["explicit", "path"])
+def test_executable_precedence_over_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, source: str) -> None:
+    import codex_cli_analyzer
+
+    commands = _discovery_environment(monkeypatch, tmp_path)
+    _install_candidate(tmp_path / "local", "version")
+    root = tmp_path / "local" / "OpenAI" / "Codex" / "bin"
+    original_glob = Path.glob
+    original_iterdir = Path.iterdir
+    def forbid_glob(path: Path, *args: object, **kwargs: object):
+        assert path != root, "precedence must skip install enumeration"
+        return original_glob(path, *args, **kwargs)
+    def forbid_iterdir(path: Path):
+        assert path != root, "precedence must skip install enumeration"
+        return original_iterdir(path)
+    monkeypatch.setattr(Path, "glob", forbid_glob)
+    monkeypatch.setattr(Path, "iterdir", forbid_iterdir)
+    explicit = "explicit-codex.exe" if source == "explicit" else None
+    def which(name: str) -> str:
+        assert source != "explicit", "explicit executable must skip PATH lookup"
+        return "path-codex.exe"
+    monkeypatch.setattr(codex_cli_analyzer.shutil, "which", which)
+    codex_cli_analyzer.analyze_with_codex(_request(), codex_cli_analyzer.CodexCliSettings(executable=explicit))
+    assert len(commands) == 1
+    assert commands[0][0] == (explicit or "path-codex.exe")
+
+
+@pytest.mark.parametrize("case", ["absent", "empty", "missing_root", "no_candidate", "wrong_depth", "directory"])
+def test_missing_canonical_install_falls_back(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, case: str) -> None:
+    import codex_cli_analyzer
+
+    commands = _discovery_environment(monkeypatch, tmp_path)
+    root = tmp_path / "local" / "OpenAI" / "Codex" / "bin"
+    if case == "absent":
+        monkeypatch.delenv("LOCALAPPDATA")
+    elif case == "empty":
+        monkeypatch.setenv("LOCALAPPDATA", "")
+    elif case == "no_candidate":
+        (root / "version").mkdir(parents=True)
+        (root / "version" / "other.exe").touch()
+    elif case == "wrong_depth":
+        (root / "version" / "nested").mkdir(parents=True)
+        (root / "version" / "nested" / "codex.exe").touch()
+        (root / "codex.exe").touch()
+    elif case == "directory":
+        (root / "version" / "codex.exe").mkdir(parents=True)
+    advice = codex_cli_analyzer.analyze_with_codex(_request(), codex_cli_analyzer.CodexCliSettings())
+    _assert_missing_executable(advice, commands)
+
+
+@pytest.mark.parametrize("same_mtime", [True, False])
+def test_multiple_installs_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, same_mtime: bool) -> None:
+    import codex_cli_analyzer
+
+    commands = _discovery_environment(monkeypatch, tmp_path)
+    first = _install_candidate(tmp_path / "local", "a")
+    second = _install_candidate(tmp_path / "local", "b")
+    os.utime(first, (1000000000, 1000000000))
+    os.utime(second, (1000000000 if same_mtime else 1000000100,) * 2)
+    advice = codex_cli_analyzer.analyze_with_codex(_request(), codex_cli_analyzer.CodexCliSettings())
+    _assert_missing_executable(advice, commands)
+
+
+def test_non_windows_does_not_discover_windows_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import codex_cli_analyzer
+
+    commands = _discovery_environment(monkeypatch, tmp_path, platform="posix")
+    _install_candidate(tmp_path / "local", "version")
+    advice = codex_cli_analyzer.analyze_with_codex(_request(), codex_cli_analyzer.CodexCliSettings())
+    _assert_missing_executable(advice, commands)
+
+
+def test_install_enumeration_error_falls_back_safely(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import codex_cli_analyzer
+
+    commands = _discovery_environment(monkeypatch, tmp_path)
+    root = tmp_path / "local" / "OpenAI" / "Codex" / "bin"
+    root.mkdir(parents=True)
+    original_glob = Path.glob
+    original_iterdir = Path.iterdir
+    def fail_glob(path: Path, *args: object, **kwargs: object):
+        if path == root:
+            raise OSError("secret enumeration failure")
+        return original_glob(path, *args, **kwargs)
+    def fail_iterdir(path: Path):
+        if path == root:
+            raise OSError("secret enumeration failure")
+        return original_iterdir(path)
+    monkeypatch.setattr(Path, "glob", fail_glob)
+    monkeypatch.setattr(Path, "iterdir", fail_iterdir)
+    advice = codex_cli_analyzer.analyze_with_codex(_request(), codex_cli_analyzer.CodexCliSettings())
+    _assert_missing_executable(advice, commands)
+    assert "secret" not in repr(advice)
+    assert str(root) not in repr(advice)
+
+
+def test_inaccessible_candidate_fails_closed_with_valid_candidate(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import codex_cli_analyzer
+
+    commands = _discovery_environment(monkeypatch, tmp_path)
+    _install_candidate(tmp_path / "local", "valid")
+    inaccessible = _install_candidate(tmp_path / "local", "inaccessible")
+    original_stat = Path.stat
+
+    def denied_stat(path: Path, *args: object, **kwargs: object):
+        if path == inaccessible:
+            raise PermissionError("secret candidate inspection failure")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", denied_stat)
+    advice = codex_cli_analyzer.analyze_with_codex(
+        _request(), codex_cli_analyzer.CodexCliSettings()
+    )
+    _assert_missing_executable(advice, commands)
+    assert "secret" not in repr(advice)
+    assert str(inaccessible) not in repr(advice)

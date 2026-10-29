@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -48,7 +49,7 @@ def analyze_with_codex(request: AnalysisRequest, settings: CodexCliSettings) -> 
     run_directory: Path | None = None
     pending_result: AIAdvice | None = None
     cleanup_reserve = min(2.0, settings.timeout_seconds * 0.1)
-    executable = settings.executable or shutil.which("codex")
+    executable = _resolve_executable(settings)
     if not executable:
         return _failure(request, "executable_not_found", started)
 
@@ -174,6 +175,51 @@ def analyze_with_codex(request: AnalysisRequest, settings: CodexCliSettings) -> 
             "cleanup": cleanup_error,
         }
         return _failure(request, stage_errors[stage], started)
+
+
+def _resolve_executable(settings: CodexCliSettings) -> str | None:
+    """Resolve Codex from config, PATH, then the observed Windows app install."""
+    if settings.executable:
+        return settings.executable
+
+    executable = shutil.which("codex")
+    if executable:
+        return executable
+
+    if os.name != "nt":
+        return None
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return None
+
+    install_root = Path(local_app_data) / "OpenAI" / "Codex" / "bin"
+    candidates: list[Path] = []
+    try:
+        for version_directory in install_root.iterdir():
+            try:
+                directory_mode = version_directory.stat().st_mode
+            except FileNotFoundError:
+                # The installation changed during enumeration; do not guess.
+                return None
+            if not stat.S_ISDIR(directory_mode):
+                continue
+
+            candidate = version_directory / "codex.exe"
+            try:
+                candidate_mode = candidate.stat().st_mode
+            except FileNotFoundError:
+                continue
+            if stat.S_ISREG(candidate_mode):
+                candidates.append(candidate)
+    except OSError:
+        # Unlike Path.glob, explicit stat calls preserve access failures.
+        return None
+
+    # The app's version directory is opaque; multiple binaries are ambiguous.
+    if len(candidates) != 1:
+        return None
+    return str(candidates[0])
 
 
 @contextmanager

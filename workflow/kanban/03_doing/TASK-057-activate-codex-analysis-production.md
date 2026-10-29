@@ -2,6 +2,14 @@
 
 Status: corte autorizado pelo usuário em 2026-10-24; execução em andamento. A chave OpenRouter exposta foi desativada pelo usuário e confirmada no Chrome pela ação disponível `Enable`. Criar uma chave substituta somente se rollback exigir o retorno ao OpenRouter. Classificação: ativação operacional sensível. Dependência: TASK-056 aceita.
 
+## Atualização operacional — 2026-10-29
+
+- O usuário escolheu a opção A: integrar a correção de descoberta do executável Codex CLI em produção, sem alterar `.env`, `run_prod.bat` ou a tarefa/agendamento do Windows. A integração foi feita a partir do commit revisado `03cbd1a` após backup em `%LOCALAPPDATA%\binance_dist\backups\TASK-057-20261029-deploy`.
+- O checkout de produção está em `3c54103`; foram restaurados `codex_cli_analyzer.py` e `tests/test_codex_cli_analyzer.py`, com blobs iguais aos do commit revisado. A auditoria independente confirmou a correspondência e não encontrou alterações rastreadas no launcher. Os hashes de `.env` e `run_prod.bat` permanecem os valores do preflight desta implantação; Agendador não foi alterado.
+- Verificação após integração: teste focal do resolver -> 53 aprovados; suíte completa -> 387 aprovados e 1 falha baseline conhecida em `test_rebalance_fails_closed_when_required_macro_source_is_untrusted[overflow]`.
+- Estado operacional observado em 2026-10-29 10:23 -03:00: tarefa `binance_dist` presente/Ready, última execução 09:00:01 com resultado 0, próxima execução automática 21:00:00 -03:00. O audit da aplicação da execução das 09:00 marcou `executable_not_found`, fallback determinístico e status `skipped`; não houve inferência OpenRouter.
+- Próximo passo já autorizado: observar somente o ciclo automático de 2026-10-29 21:00 -03:00 e seu audit sanitizado. Não iniciar tarefa, rebalance ou chamada da exchange manualmente. Se o ciclo estiver ausente ou falhar, registrar evidência sanitizada e parar para decisão do usuário; não fazer novo corte nem criar chave OpenRouter automaticamente.
+
 ## Objetivo e escopo
 
 Selecionar Codex explicitamente no fluxo agendado existente após aceite da candidata. Design: `docs/superpowers/specs/2026-10-21-codex-cli-analysis-design.md`. Passos: seção TASK-057 de `docs/superpowers/plans/2026-10-21-codex-cli-analysis.md`.
