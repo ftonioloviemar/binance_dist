@@ -23,7 +23,6 @@ def compare_snapshots(
         before.get("data_quality") == "complete"
         and after.get("data_quality") == "complete"
     )
-    observed_change = end_value - start_value if snapshots_complete else None
     missing_assets: set[str] = set()
     hold_value = Decimal("0")
     before_prices = before.get("prices", {})
@@ -47,6 +46,11 @@ def compare_snapshots(
 
     hold_change = (
         hold_value - start_value
+        if not missing_assets and snapshots_complete
+        else None
+    )
+    observed_change = (
+        end_value - start_value
         if not missing_assets and snapshots_complete
         else None
     )

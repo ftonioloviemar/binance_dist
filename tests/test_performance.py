@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from performance import _aggregate_execution_costs, compare_snapshots
 from performance_store import load_external_flows, record_external_flow
 
@@ -34,17 +36,35 @@ def test_compare_snapshots_reports_observed_change_and_hold_benchmark() -> None:
     assert result["profit"] is None
 
 
-def test_compare_snapshots_does_not_invent_hold_when_final_price_is_missing() -> None:
+@pytest.mark.parametrize("missing_phase", ["before", "after"])
+def test_compare_snapshots_nulls_changes_when_asset_price_is_missing(missing_phase: str) -> None:
     before = _snapshot(phase="before", btc_price="100", btc_value="100", total="100")
-    after = _snapshot(phase="after", btc_price="100", btc_value="100", total="100")
-    after["prices"] = {}
+    after = _snapshot(phase="after", btc_price="110", btc_value="110", total="110")
+    (before if missing_phase == "before" else after)["prices"] = {}
 
     result = compare_snapshots(before, after)
 
+    assert result["observed_change"] is None
     assert result["hold_value"] is None
     assert result["hold_change"] is None
     assert result["attribution_status"] == "incomplete"
     assert result["missing_assets"] == ["BTC"]
+
+
+@pytest.mark.parametrize("incomplete_phase", ["before", "after"])
+def test_compare_snapshots_nulls_changes_when_snapshot_is_incomplete(
+    incomplete_phase: str,
+) -> None:
+    before = _snapshot(phase="before", btc_price="100", btc_value="100", total="100")
+    after = _snapshot(phase="after", btc_price="110", btc_value="110", total="110")
+    (before if incomplete_phase == "before" else after)["data_quality"] = "incomplete"
+
+    result = compare_snapshots(before, after)
+
+    assert result["observed_change"] is None
+    assert result["hold_change"] is None
+    assert result["attribution_status"] == "incomplete"
+    assert result["missing_assets"] == []
 
 
 def test_external_flow_round_trip(tmp_path) -> None:
