@@ -486,7 +486,9 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     )
 
     audit_parser = subcommands.add_parser(
-        "audit", help="Inspect past runs stored in SQLite logs"
+        "audit",
+        help="Inspect past runs from daily logs",
+        description="Inspect runs recorded in logs/YYYYMMDD.log. logs/audit.db is legacy.",
     )
     audit_parser.add_argument(
         "--run-id", help="Show detailed information for a specific run"

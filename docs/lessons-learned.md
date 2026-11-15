@@ -28,6 +28,7 @@ This document records reusable engineering and operational lessons from the Bina
 - Do not call an in-process cache a scheduler-safe solution.
 - Do not validate code by sending live trades, redeeming Simple Earn positions, or subscribing products.
 - Do not rewrite historical logs to make an audit look clean; fix classification and preserve the original evidence.
+- Treat `logs/YYYYMMDD.log` as the current run-audit source; `logs/audit.db` is legacy. Correlate run audits and performance snapshots by `run_id` before diagnosing missing persistence. A failed `valuation_guard` with an incomplete before snapshot and skipped shadow observation is expected fail-closed behavior, not by itself an audit outage.
 - Do not infer return or gain from order count. Evaluate net return, fees, turnover, residual drift, and time in stable assets over a defined observation window.
 - Do not call `observed_change` or `hold_change` profit when `attribution_status` is `not_attributed` or `incomplete`.
 
