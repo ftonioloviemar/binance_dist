@@ -1183,8 +1183,25 @@ def test_rebalance_blocks_opposite_side_trade_inside_anti_churn_cooldown(
     monkeypatch.chdir(tmp_path)
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
-    prior_time = datetime.now().astimezone() - timedelta(hours=1)
-    (logs_dir / "20260801.log").write_text(
+    now = datetime(2026, 11, 15, 12, tzinfo=timezone.utc)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz else now.replace(tzinfo=None)
+
+        @classmethod
+        def utcnow(cls):
+            return now.replace(tzinfo=None)
+
+    import anti_churn
+    import logging_audit
+
+    monkeypatch.setattr(anti_churn, "datetime", FixedDateTime)
+    monkeypatch.setattr(logging_audit, "datetime", FixedDateTime)
+    history_file = logs_dir / f"{now:%Y%m%d}.log"
+    prior_time = now - timedelta(hours=1)
+    history_file.write_text(
         "\n".join(
             [
                 f"{prior_time.isoformat()} | run_start | run_id=prior | status=started | profile=moderate | dry_run=false",
@@ -1195,6 +1212,14 @@ def test_rebalance_blocks_opposite_side_trade_inside_anti_churn_cooldown(
         + "\n",
         encoding="utf-8",
     )
+    original_filter = app.filter_anti_churn_trades
+
+    def assert_history_then_filter(**kwargs):
+        assert history_file.is_file()
+        assert "run_id=prior | status=FILLED" in history_file.read_text(encoding="utf-8")
+        return original_filter(**kwargs)
+
+    monkeypatch.setattr(app, "filter_anti_churn_trades", assert_history_then_filter)
     monkeypatch.setattr(app, "BinanceClient", SmallOppositeTradeClient)
     monkeypatch.setattr(
         app,
