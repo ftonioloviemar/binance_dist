@@ -125,10 +125,12 @@ def compute_current_weights(
         if asset == quote:
             price = 1.0
         else:
-            price = asset_prices.get(asset)
-            if price is None:
-                logger.debug("Skipping asset %s because no quote price was found", asset)
-                continue
+            try:
+                price = float(asset_prices[asset])
+            except (KeyError, TypeError, ValueError, OverflowError):
+                raise PortfolioError("Invalid market price for a held asset")
+            if not math.isfinite(price) or price <= 0:
+                raise PortfolioError("Invalid market price for a held asset")
         value = quantity * price
         total_value += value
         positions[asset] = AssetPosition(

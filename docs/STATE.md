@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-10-24.
+Last updated: 2026-11-15.
 
 ## Purpose
 
@@ -19,6 +19,8 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Catalogoantigo-adjacent skills installed in Codex home: `caveman`, `handoff`, `diagnose`, `improve-codebase-architecture`. Restart Codex for active skill list refresh.
 
 ## Current Work
+
+- 2026-11-15: Fresh bounded TASK-064 effort after review 3/3 is implemented and Terra-reviewed. Round 1 finding (initial Earn failure could mislabel dry-run snapshot `simulation`; missing audit warning) is fixed. Focused valuation/portfolio/performance suite -> 168 passed; full socket/DNS-fenced suite -> 506 passed/6 failed (five require unavailable Binance credentials; anti-churn sentinel failure reproduced identically at base `3c54103`). Terra review round 2/3 found no critical/important issue. No live operations. Commit pending verified staging. TASK-065 and monitor automation remain deferred/paused; Windows Scheduler unchanged. See TASK-064 card in `workflow/kanban/05_done/`.
 
 - Planning request: replace OpenRouter analysis with local Codex CLI, exactly `gpt-6-luna` / `medium`. TASK-052 documents the design and implementation wave in `docs/superpowers/specs/2026-10-21-codex-cli-analysis-design.md` and `docs/superpowers/plans/2026-10-21-codex-cli-analysis.md`.
 - User approved implementing the saved wave. TASK-053 completed in `b00f295`; TASK-054 completed offline in `5b64027`; TASK-055 completed and independently audited in `299cd4e`.

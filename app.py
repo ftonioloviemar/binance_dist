@@ -326,6 +326,82 @@ def _finite_market_number(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _valid_market_price(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(number) and number > 0
+
+
+def _invalid_valuation_assets(
+    *,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+    prices: Mapping[str, Any],
+    quote: str,
+    targets: Mapping[str, float] | None = None,
+) -> set[str]:
+    quote_asset = quote.upper()
+    invalid: set[str] = set()
+    held_assets = {
+        balance.asset.upper()
+        for balance in spot_balances
+        if balance.total > 0
+    }
+    held_assets.update(
+        position.asset.upper()
+        for position in earn_positions
+        if position.total_amount > 0
+    )
+    target_assets = {
+        asset.upper()
+        for asset, weight in (targets or {}).items()
+        if weight > 0
+    }
+    for asset in held_assets | target_assets:
+        if asset != quote_asset and not _valid_market_price(prices.get(asset)):
+            invalid.add(asset)
+    return invalid
+
+
+def _persist_incomplete_valuation_snapshot(
+    *,
+    auditor: AuditLogger,
+    run_id: str,
+    quote: str,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+    prices: Mapping[str, Any],
+    timestamp: str,
+    data_quality: str,
+    invalid_assets: set[str],
+) -> dict[str, Any]:
+    payload = _build_performance_snapshot_payload(
+        run_id=run_id,
+        phase="before",
+        quote=quote,
+        spot_balances=spot_balances,
+        earn_positions=earn_positions,
+        prices=prices,
+        timestamp=timestamp,
+        data_quality=data_quality,
+    )
+    payload["missing_prices"] = sorted(
+        set(payload["missing_prices"]) | invalid_assets
+    )
+    payload["data_quality"] = "incomplete"
+    _persist_performance_snapshot(auditor, payload)
+    auditor.log_step(
+        name="valuation_guard",
+        status="failed",
+        detail="Held market prices are missing or invalid; run stopped before planning.",
+    )
+    return payload
+
+
 def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     defaults = load_cli_defaults()
     parser = argparse.ArgumentParser(description="Binance portfolio rebalancing CLI")
@@ -635,13 +711,6 @@ def run_rebalance(args: argparse.Namespace) -> int:
         combined_balances = list(balances)
         if earn_balances:
             combined_balances.extend(earn_balances)
-        price_source = combined_balances or balances
-        asset_prices = _fetch_asset_prices(
-            client, price_source, target_weights, args.quote
-        )
-        consolidated_snapshot = compute_current_weights(
-            price_source, asset_prices, args.quote
-        )
         macro_snapshot = fetch_macro_snapshot()
 
         # Adaptive Strategy Logic
@@ -778,6 +847,44 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 detail=f"Snapshot loaded ({summary})",
             )
 
+        price_source = combined_balances or balances
+        asset_prices = _fetch_asset_prices(
+            client, price_source, target_weights, args.quote
+        )
+        invalid_prices = _invalid_valuation_assets(
+            spot_balances=balances,
+            earn_positions=simple_earn_positions,
+            prices=asset_prices,
+            quote=args.quote,
+        )
+        before_performance = _build_performance_snapshot_payload(
+            run_id=auditor.run_id or "unknown",
+            phase="before",
+            quote=args.quote,
+            spot_balances=balances,
+            earn_positions=simple_earn_positions,
+            prices=asset_prices,
+            timestamp=_performance_timestamp(),
+            data_quality=simple_earn_snapshot_quality,
+        )
+        if invalid_prices:
+            _persist_incomplete_valuation_snapshot(
+                auditor=auditor,
+                run_id=auditor.run_id or "unknown",
+                quote=args.quote,
+                spot_balances=balances,
+                earn_positions=simple_earn_positions,
+                prices=asset_prices,
+                timestamp=_performance_timestamp(),
+                data_quality=simple_earn_snapshot_quality,
+                invalid_assets=invalid_prices,
+            )
+            raise PortfolioError("Invalid market prices for held or target assets")
+
+        consolidated_snapshot = compute_current_weights(
+            price_source, asset_prices, args.quote
+        )
+
         holdings_context = _build_holdings_context(
             spot_balances=balances,
             earn_positions=simple_earn_positions,
@@ -846,6 +953,25 @@ def run_rebalance(args: argparse.Namespace) -> int:
         asset_prices = _fetch_asset_prices(
             client, price_source, refined_targets, args.quote
         )
+        invalid_prices = _invalid_valuation_assets(
+            spot_balances=balances,
+            earn_positions=simple_earn_positions,
+            prices=asset_prices,
+            quote=args.quote,
+        )
+        if invalid_prices:
+            _persist_incomplete_valuation_snapshot(
+                auditor=auditor,
+                run_id=auditor.run_id or "unknown",
+                quote=args.quote,
+                spot_balances=balances,
+                earn_positions=simple_earn_positions,
+                prices=asset_prices,
+                timestamp=_performance_timestamp(),
+                data_quality=simple_earn_snapshot_quality,
+                invalid_assets=invalid_prices,
+            )
+            raise PortfolioError("Invalid market prices for held or target assets")
         full_snapshot = compute_current_weights(price_source, asset_prices, args.quote)
         listed_assets = ", ".join(sorted(full_snapshot.positions.keys())[:20])
         suffix = " ..." if len(full_snapshot.positions) > 20 else ""
@@ -856,6 +982,26 @@ def run_rebalance(args: argparse.Namespace) -> int:
         asset_prices = _ensure_target_prices(
             client, asset_prices, refined_targets, args.quote
         )
+        invalid_prices = _invalid_valuation_assets(
+            spot_balances=balances,
+            earn_positions=simple_earn_positions,
+            prices=asset_prices,
+            quote=args.quote,
+            targets=refined_targets,
+        )
+        if invalid_prices:
+            _persist_incomplete_valuation_snapshot(
+                auditor=auditor,
+                run_id=auditor.run_id or "unknown",
+                quote=args.quote,
+                spot_balances=balances,
+                earn_positions=simple_earn_positions,
+                prices=asset_prices,
+                timestamp=_performance_timestamp(),
+                data_quality=simple_earn_snapshot_quality,
+                invalid_assets=invalid_prices,
+            )
+            raise PortfolioError("Invalid market prices for held or target assets")
         before_performance = _build_performance_snapshot_payload(
             run_id=auditor.run_id or "unknown",
             phase="before",
@@ -1127,13 +1273,13 @@ def run_rebalance(args: argparse.Namespace) -> int:
         latest_balances_refresh_succeeded = False
         try:
             final_balances = client.get_account_balances()
+            latest_balances = final_balances
             latest_prices = _fetch_asset_prices(
                 client, final_balances, refined_targets, args.quote
             )
             final_snapshot = compute_current_weights(
                 final_balances, latest_prices, args.quote
             )
-            latest_balances = final_balances
             latest_balances_refresh_succeeded = True
         except PortfolioError as exc:
             detail = f"Failed to refresh final balances: {exc}"
@@ -1167,6 +1313,8 @@ def run_rebalance(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             spot_balances_fresh=latest_balances_refresh_succeeded,
             pendings=pendings,
+            final_valuation_refresh_succeeded=latest_balances_refresh_succeeded,
+            initial_earn_snapshot_quality=simple_earn_snapshot_quality,
         )
         _persist_performance_snapshot(auditor, after_performance)
         if pendings:
@@ -1398,11 +1546,25 @@ def _build_post_trade_performance_snapshot_payload(
     dry_run: bool,
     spot_balances_fresh: bool,
     pendings: list[str],
+    final_valuation_refresh_succeeded: bool = False,
+    initial_earn_snapshot_quality: str = "incomplete",
 ) -> dict[str, Any]:
     latest_balances = list(spot_balances)
     latest_earn_positions = list(earn_positions)
     latest_prices = dict(prices)
     data_quality = "simulation" if dry_run else "complete"
+    final_valuation_refresh_failed = (
+        dry_run and not final_valuation_refresh_succeeded
+    )
+
+    if final_valuation_refresh_failed:
+        data_quality = "incomplete"
+    if (
+        dry_run
+        and simple_earn_enabled
+        and initial_earn_snapshot_quality != "complete"
+    ):
+        data_quality = "incomplete"
 
     if simple_earn_enabled and products_by_asset:
         if dry_run or spot_balances_fresh:
@@ -1474,7 +1636,7 @@ def _build_post_trade_performance_snapshot_payload(
             pendings.append(detail)
             auditor.log_step(name="prices_snapshot_after", status="failed", detail=detail)
 
-    return _build_performance_snapshot_payload(
+    payload = _build_performance_snapshot_payload(
         run_id=run_id,
         phase="after",
         quote=quote,
@@ -1484,6 +1646,45 @@ def _build_post_trade_performance_snapshot_payload(
         timestamp=timestamp,
         data_quality=data_quality,
     )
+
+    invalid_prices = _invalid_valuation_assets(
+        spot_balances=latest_balances,
+        earn_positions=latest_earn_positions,
+        prices=latest_prices,
+        quote=quote,
+    )
+    if invalid_prices:
+        payload["missing_prices"] = sorted(
+            set(payload["missing_prices"]) | invalid_prices
+        )
+        payload["data_quality"] = "incomplete"
+        if dry_run:
+            detail = (
+                "Dry-run after-snapshot held asset prices are missing or invalid; "
+            )
+            if final_valuation_refresh_failed:
+                detail += "final valuation refresh failed; "
+            detail += "snapshot is incomplete; no live operations were performed."
+        else:
+            detail = (
+                "Post-operation held asset prices are missing or invalid; "
+                "snapshot is incomplete; completed operations remain in effect."
+            )
+        pendings.append(detail)
+        auditor.log_step(
+            name="prices_snapshot_after", status="warning", detail=detail
+        )
+    elif final_valuation_refresh_failed:
+        detail = (
+            "Final dry-run valuation refresh failed; after snapshot is incomplete; "
+            "no live operations were performed."
+        )
+        pendings.append(detail)
+        auditor.log_step(
+            name="prices_snapshot_after", status="warning", detail=detail
+        )
+
+    return payload
 
 
 def _persist_performance_snapshot(
@@ -1504,7 +1705,8 @@ def _persist_performance_snapshot(
             sort_keys=True,
             separators=(",", ":"),
         )
-        auditor.log_step(name="portfolio_snapshot", status="info", detail=detail)
+        status = "warning" if payload.get("data_quality") == "incomplete" else "info"
+        auditor.log_step(name="portfolio_snapshot", status=status, detail=detail)
     except Exception as exc:  # pragma: no cover - defensive persistence guard
         auditor.log_step(
             name="portfolio_snapshot",

@@ -151,6 +151,8 @@ def _capture_post_trade_snapshot(
         dry_run=dry_run,
         spot_balances_fresh=spot_balances_fresh,
         pendings=pendings,
+        initial_earn_snapshot_quality="complete",
+        final_valuation_refresh_succeeded=True,
     )
     return payload, auditor, pendings
 

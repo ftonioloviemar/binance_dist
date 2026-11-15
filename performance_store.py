@@ -24,11 +24,11 @@ def build_portfolio_snapshot(
     external_flow_status: str = "unknown",
 ) -> dict[str, Any]:
     quote = quote_asset.upper()
-    normalized_prices = {
-        str(asset).upper(): _decimal(value)
-        for asset, value in prices.items()
-        if _decimal(value) is not None and _decimal(value) >= 0
-    }
+    normalized_prices: dict[str, Decimal] = {}
+    for asset, raw_price in prices.items():
+        price = _decimal(raw_price)
+        if price is not None and price.is_finite() and price > 0:
+            normalized_prices[str(asset).upper()] = price
     asset_values: dict[str, Decimal] = {}
     source_totals = {"spot": Decimal("0"), "earn": Decimal("0")}
     missing_prices: set[str] = set()
