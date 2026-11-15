@@ -15,6 +15,18 @@ from macro_context import MacroSnapshot
 from portfolio import AIAdvice
 
 
+def _synthetic_env_settings(recv_window: int) -> EnvSettings:
+    return EnvSettings(
+        api_key="synthetic-key",
+        api_secret="synthetic-secret",
+        testnet=False,
+        base_url="https://api.binance.com",
+        recv_window=recv_window,
+        openrouter_api_key="synthetic-openrouter-key",
+        openrouter_models=("working/model:free",),
+    )
+
+
 def test_earn_redeem_audit_keeps_structured_error_without_request_secrets() -> None:
     class FailingClient:
         def redeem_simple_earn_flexible(self, **kwargs):
@@ -596,6 +608,7 @@ def test_rebalance_persists_adaptive_strategy_failure(tmp_path: Path, monkeypatc
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(app, "BinanceClient", FakeClient)
+    monkeypatch.setattr(app, "load_env_settings", _synthetic_env_settings)
     monkeypatch.setattr(app, "get_adaptive_manager", lambda: BrokenAdaptiveManager())
     monkeypatch.setattr(
         app,
@@ -658,6 +671,7 @@ def test_rebalance_fails_closed_when_required_macro_source_is_untrusted(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(app, "BinanceClient", FakeClient)
+    monkeypatch.setattr(app, "load_env_settings", _synthetic_env_settings)
     now = datetime(2026, 10, 3, 12, tzinfo=timezone.utc)
     sources = _macro_sources()
     if source_case == "stale":
