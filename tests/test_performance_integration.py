@@ -152,7 +152,7 @@ def _capture_post_trade_snapshot(
         spot_balances_fresh=spot_balances_fresh,
         pendings=pendings,
     )
-    return payload, auditor, pendings
+    return payload.payload, auditor, pendings
 
 
 def test_final_snapshot_uses_post_redeem_spot_and_earn_positions() -> None:

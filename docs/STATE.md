@@ -1,6 +1,6 @@
 # Current State
 
-Last updated: 2026-10-29.
+Last updated: 2026-11-21.
 
 ## Purpose
 
@@ -20,6 +20,7 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 
 ## Current Work
 
+- Current isolated work: TASK-064 fail-closed valuation and matched `LD<asset>`/Simple Earn reconciliation is implemented and verified in branch `codex/fix-matched-ld-valuation`; see its Kanban card for exact tests and review limits. The Windows Scheduler checkout at `C:\python\binance_dist` was not modified or activated.
 - Planning request: replace OpenRouter analysis with local Codex CLI, exactly `gpt-6-luna` / `medium`. TASK-052 documents the design and implementation wave in `docs/superpowers/specs/2026-10-21-codex-cli-analysis-design.md` and `docs/superpowers/plans/2026-10-21-codex-cli-analysis.md`.
 - User approved implementing the saved wave. TASK-053 completed in `b00f295`; TASK-054 completed offline in `5b64027`; TASK-055 completed and independently audited in `299cd4e`.
 - User authorized unlimited synthetic TASK-056 inferences for fixed synthetic context/Luna-medium/sanitized diagnostics; that authorization alone excluded scheduler/live Binance/Earn/TASK-057. A separate TASK-057 cutover and next scheduled live-cycle approval was received on 2026-10-24 and is recorded below. Root cause confirmed: Git for Windows descendants of `codex exec` retained temp files after the CLI exited (Restart Manager found Git in all 5 observed cleanup failures). Reaper now pins and revalidates descendant process handles, then terminates only those descendants before cleanup. Three consecutive synthetic inferences were accepted; 12 descendants terminated, zero busy cleanup errors. Focused replay/adapter/launcher -> 46 passed; full suite -> 367 passed and 7 known baseline failures. `fe37b5d` was the pre-cutover production baseline; TASK-057 advanced production as recorded below. This authorization supersedes older notes below that say no further inference was authorized.
@@ -55,7 +56,7 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 - Latest strategy activation: `TASK-024` enables `--adaptive` in `run_prod.bat`, used by the scheduled production task; this was explicitly approved by the user. Validate audit evidence in subsequent scheduled runs.
 - Latest verification: `uv run pytest -q` -> 53 passed; `TASK-023` focused test -> 16 passed after RED reproduced the historical `NoneType` failure.
 - OpenRouter model fallback and event-driven auto-curation are implemented and documented.
-- Current active card: TASK-057 in `workflow/kanban/03_doing/`; earlier TASK-051 is complete.
+- Historical active card at the time of the Codex CLI migration: TASK-057. The current isolated card is TASK-064; older status notes below are historical unless superseded above.
 - Latest completed cards: `TASK-020`, `TASK-021`, `TASK-022`, `TASK-023`, and `TASK-024` operational resilience/strategy activation.
 - `TASK-024` verified that `run_prod.bat` applies adaptive strategy in a dry-run; the Windows task remains `Ready` and points to that launcher. Observe upcoming scheduled run audits for `adaptive_strategy` before evaluating practical results.
 - Latest verification: `uv run pytest -q` -> 54 passed; adaptive launcher dry-run `4462f11c56904297bb6ce00f950c49f0` completed without live orders.

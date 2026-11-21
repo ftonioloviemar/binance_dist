@@ -126,18 +126,24 @@ def compute_current_weights(
             price = 1.0
         else:
             price = asset_prices.get(asset)
-            if price is None:
-                logger.debug("Skipping asset %s because no quote price was found", asset)
-                continue
+            if not _is_valid_market_price(price):
+                raise PortfolioError(
+                    "Cannot value portfolio because a positive balance has an invalid market price"
+                )
         value = quantity * price
         total_value += value
-        positions[asset] = AssetPosition(
-            asset=asset,
-            quantity=quantity,
-            price=price,
-            value=value,
-            weight=0.0,
-        )
+        existing = positions.get(asset)
+        if existing is None:
+            positions[asset] = AssetPosition(
+                asset=asset,
+                quantity=quantity,
+                price=price,
+                value=value,
+                weight=0.0,
+            )
+        else:
+            existing.quantity += quantity
+            existing.value += value
 
     if total_value == 0:
         raise PortfolioError("Unable to compute weights for an empty portfolio")
@@ -459,12 +465,14 @@ def build_trades(
     for asset, delta_weight in decision.deltas.items():
         if asset == quote:
             continue
-        price = prices.get(asset)
-        if price is None or price <= 0:
-            reject_log.append(f"{asset}{quote}: missing price data")
-            continue
         value_delta = snapshot.total_value * delta_weight
         if value_delta == 0:
+            continue
+        price = prices.get(asset)
+        if not _is_valid_market_price(price):
+            reject_log.append(
+                "Trade instruction skipped because a target market price is invalid"
+            )
             continue
         side = "BUY" if value_delta > 0 else "SELL"
         symbol = f"{asset}{quote}"
@@ -542,6 +550,14 @@ def build_trades(
             )
         )
     return instructions
+
+
+def _is_valid_market_price(value: Any) -> bool:
+    try:
+        price = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(price) and price > 0
 
 
 def _quantity_with_min_notional_uplift(

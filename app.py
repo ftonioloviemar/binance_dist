@@ -183,6 +183,12 @@ class AdaptiveSourceAssessment:
     btc_age_seconds: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class PostTradeSnapshotResult:
+    payload: dict[str, Any]
+    summary_weights: dict[str, float] | None
+
+
 def _assess_adaptive_sources(
     snapshot: MacroSnapshot, *, now: datetime | None = None
 ) -> AdaptiveSourceAssessment:
@@ -632,15 +638,12 @@ def run_rebalance(args: argparse.Namespace) -> int:
         earn_balances = (
             _balances_from_earn(simple_earn_positions) if simple_earn_positions else []
         )
-        combined_balances = list(balances)
-        if earn_balances:
-            combined_balances.extend(earn_balances)
+        combined_balances = _balances_for_valuation(
+            spot_balances=balances, earn_positions=simple_earn_positions
+        )
         price_source = combined_balances or balances
         asset_prices = _fetch_asset_prices(
             client, price_source, target_weights, args.quote
-        )
-        consolidated_snapshot = compute_current_weights(
-            price_source, asset_prices, args.quote
         )
         macro_snapshot = fetch_macro_snapshot()
 
@@ -778,6 +781,18 @@ def run_rebalance(args: argparse.Namespace) -> int:
                 detail=f"Snapshot loaded ({summary})",
             )
 
+        _fail_closed_on_unpriced_holdings(
+            auditor=auditor,
+            run_id=auditor.run_id or "unknown",
+            quote=args.quote,
+            spot_balances=balances,
+            earn_positions=simple_earn_positions,
+            prices=asset_prices,
+            data_quality=simple_earn_snapshot_quality,
+        )
+        consolidated_snapshot = compute_current_weights(
+            price_source, asset_prices, args.quote
+        )
         holdings_context = _build_holdings_context(
             spot_balances=balances,
             earn_positions=simple_earn_positions,
@@ -845,6 +860,15 @@ def run_rebalance(args: argparse.Namespace) -> int:
         price_source = combined_balances or balances
         asset_prices = _fetch_asset_prices(
             client, price_source, refined_targets, args.quote
+        )
+        _fail_closed_on_unpriced_holdings(
+            auditor=auditor,
+            run_id=auditor.run_id or "unknown",
+            quote=args.quote,
+            spot_balances=balances,
+            earn_positions=simple_earn_positions,
+            prices=asset_prices,
+            data_quality=simple_earn_snapshot_quality,
         )
         full_snapshot = compute_current_weights(price_source, asset_prices, args.quote)
         listed_assets = ", ".join(sorted(full_snapshot.positions.keys())[:20])
@@ -1099,7 +1123,11 @@ def run_rebalance(args: argparse.Namespace) -> int:
                     detail=f"Fetched {len(execution_balances)} balances after Simple Earn redeem",
                 )
         available_balances = _init_available_balances(
-            snapshot, full_snapshot, execution_balances
+            snapshot,
+            full_snapshot,
+            execution_balances,
+            earn_positions=simple_earn_positions,
+            simulate_earn_redeem=(args.dry_run and env_settings.simple_earn_enabled),
         )
         auditor.log_step(
             name="execution",
@@ -1121,17 +1149,15 @@ def run_rebalance(args: argparse.Namespace) -> int:
         auditor.log_step(
             name="execution", status="completed", detail="Trades processed"
         )
-        final_snapshot = snapshot
         latest_balances = balances
         latest_prices = asset_prices
         latest_balances_refresh_succeeded = False
         try:
             final_balances = client.get_account_balances()
+            if not any(balance.total > 0 for balance in final_balances):
+                raise PortfolioError("empty portfolio")
             latest_prices = _fetch_asset_prices(
                 client, final_balances, refined_targets, args.quote
-            )
-            final_snapshot = compute_current_weights(
-                final_balances, latest_prices, args.quote
             )
             latest_balances = final_balances
             latest_balances_refresh_succeeded = True
@@ -1151,7 +1177,6 @@ def run_rebalance(args: argparse.Namespace) -> int:
             auditor.log_step(name="final_balances", status="failed", detail=detail)
             logger.warning(detail)
 
-        _print_summary(full_snapshot, final_snapshot)
         after_performance = _build_post_trade_performance_snapshot_payload(
             client=client,
             auditor=auditor,
@@ -1167,8 +1192,13 @@ def run_rebalance(args: argparse.Namespace) -> int:
             dry_run=args.dry_run,
             spot_balances_fresh=latest_balances_refresh_succeeded,
             pendings=pendings,
+            initial_data_quality=simple_earn_snapshot_quality,
         )
-        _persist_performance_snapshot(auditor, after_performance)
+        _print_summary(
+            full_snapshot,
+            after_performance.summary_weights,
+        )
+        _persist_performance_snapshot(auditor, after_performance.payload)
         if pendings:
             _log_pendings(auditor, pendings)
         finalize_with_shadow("completed")
@@ -1351,19 +1381,9 @@ def _build_performance_snapshot_payload(
     timestamp: str,
     data_quality: str | None = None,
 ) -> dict[str, Any]:
-    earn_assets = {
-        position.asset.upper()
-        for position in earn_positions
-        if position.total_amount > 0
-    }
-    snapshot_spot_balances = [
-        balance
-        for balance in spot_balances
-        if not (
-            balance.asset.upper().startswith("LD")
-            and balance.asset.upper()[2:] in earn_assets
-        )
-    ]
+    snapshot_spot_balances = _spot_balances_for_valuation(
+        spot_balances=spot_balances, earn_positions=earn_positions
+    )
     return build_portfolio_snapshot(
         run_id=run_id,
         phase=phase,
@@ -1382,6 +1402,143 @@ def _build_performance_snapshot_payload(
     )
 
 
+def _fail_closed_on_unpriced_holdings(
+    *,
+    auditor: AuditLogger,
+    run_id: str,
+    quote: str,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+    prices: Mapping[str, float],
+    data_quality: str | None = None,
+) -> None:
+    invalid_assets = _unpriced_held_assets(
+        spot_balances=spot_balances,
+        earn_positions=earn_positions,
+        prices=prices,
+        quote=quote,
+    )
+    if not invalid_assets:
+        return
+
+    snapshot = _build_performance_snapshot_payload(
+        run_id=run_id,
+        phase="before",
+        quote=quote,
+        spot_balances=spot_balances,
+        earn_positions=earn_positions,
+        prices=prices,
+        timestamp=_performance_timestamp(),
+        data_quality=data_quality,
+    )
+    snapshot["data_quality"] = "incomplete"
+    snapshot["missing_prices"] = sorted(
+        set(snapshot.get("missing_prices", [])) | invalid_assets
+    )
+    detail = (
+        "Positive Spot or Simple Earn balances have invalid market prices; "
+        "run halted before planning or fund movement"
+    )
+    auditor.log_step(name="valuation_guard", status="failed", detail=detail)
+    _persist_performance_snapshot(auditor, snapshot)
+    raise PortfolioError(detail)
+
+
+def _unpriced_held_assets(
+    *,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+    prices: Mapping[str, float],
+    quote: str,
+) -> set[str]:
+    quote_asset = quote.upper()
+    valued_spot_balances = _spot_balances_for_valuation(
+        spot_balances=spot_balances, earn_positions=earn_positions
+    )
+    invalid_assets = {
+        balance.asset.upper()
+        for balance in valued_spot_balances
+        if balance.total > 0
+        and balance.asset.upper() != quote_asset
+        and not _valid_market_price(prices.get(balance.asset.upper()))
+    }
+    invalid_assets.update(
+        position.asset.upper()
+        for position in earn_positions
+        if position.total_amount > 0
+        and position.asset.upper() != quote_asset
+        and not _valid_market_price(prices.get(position.asset.upper()))
+    )
+    return invalid_assets
+
+
+def _spot_balances_for_valuation(
+    *,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+) -> list[Balance]:
+    earn_assets = {
+        position.asset.upper()
+        for position in earn_positions
+        if position.total_amount > 0
+    }
+    return [
+        balance
+        for balance in spot_balances
+        if not (
+            balance.asset.upper().startswith("LD")
+            and balance.asset.upper()[2:] in earn_assets
+        )
+    ]
+
+
+def _balances_for_valuation(
+    *,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+) -> list[Balance]:
+    return [
+        *_spot_balances_for_valuation(
+            spot_balances=spot_balances, earn_positions=earn_positions
+        ),
+        *_balances_from_earn(earn_positions),
+    ]
+
+
+def _portfolio_weights_from_holdings(
+    *,
+    spot_balances: Sequence[Balance],
+    earn_positions: Sequence[SimpleEarnPosition],
+    prices: Mapping[str, float],
+    quote: str,
+    data_quality: str,
+) -> dict[str, float] | None:
+    if data_quality not in {"complete", "simulation"}:
+        return None
+    if _unpriced_held_assets(
+        spot_balances=spot_balances,
+        earn_positions=earn_positions,
+        prices=prices,
+        quote=quote,
+    ):
+        return None
+    try:
+        snapshot = compute_current_weights(
+            _balances_for_valuation(
+                spot_balances=spot_balances,
+                earn_positions=earn_positions,
+            ),
+            prices,
+            quote,
+        )
+    except PortfolioError:
+        return None
+    return {
+        asset: position.weight
+        for asset, position in snapshot.positions.items()
+    }
+
+
 def _build_post_trade_performance_snapshot_payload(
     *,
     client: BinanceClient,
@@ -1398,11 +1555,16 @@ def _build_post_trade_performance_snapshot_payload(
     dry_run: bool,
     spot_balances_fresh: bool,
     pendings: list[str],
-) -> dict[str, Any]:
+    initial_data_quality: str = "complete",
+) -> PostTradeSnapshotResult:
     latest_balances = list(spot_balances)
     latest_earn_positions = list(earn_positions)
     latest_prices = dict(prices)
-    data_quality = "simulation" if dry_run else "complete"
+    data_quality = (
+        "incomplete"
+        if dry_run and initial_data_quality != "complete"
+        else "simulation" if dry_run else "complete"
+    )
 
     if simple_earn_enabled and products_by_asset:
         if dry_run or spot_balances_fresh:
@@ -1460,10 +1622,10 @@ def _build_post_trade_performance_snapshot_payload(
                 name="earn_snapshot_after", status="failed", detail=detail
             )
 
-        combined_balances = [
-            *latest_balances,
-            *_balances_from_earn(latest_earn_positions),
-        ]
+        combined_balances = _balances_for_valuation(
+            spot_balances=latest_balances,
+            earn_positions=latest_earn_positions,
+        )
         try:
             latest_prices = _fetch_asset_prices(
                 client, combined_balances, targets, quote
@@ -1474,7 +1636,7 @@ def _build_post_trade_performance_snapshot_payload(
             pendings.append(detail)
             auditor.log_step(name="prices_snapshot_after", status="failed", detail=detail)
 
-    return _build_performance_snapshot_payload(
+    snapshot = _build_performance_snapshot_payload(
         run_id=run_id,
         phase="after",
         quote=quote,
@@ -1483,6 +1645,35 @@ def _build_post_trade_performance_snapshot_payload(
         prices=latest_prices,
         timestamp=timestamp,
         data_quality=data_quality,
+    )
+    unpriced_after_assets = _unpriced_held_assets(
+        spot_balances=latest_balances,
+        earn_positions=latest_earn_positions,
+        prices=latest_prices,
+        quote=quote,
+    )
+    if unpriced_after_assets:
+        data_quality = "incomplete"
+        snapshot["data_quality"] = data_quality
+        snapshot["missing_prices"] = sorted(
+            set(snapshot.get("missing_prices", [])) | unpriced_after_assets
+        )
+        detail = (
+            "Post-operation valuation has invalid market prices; after snapshot is "
+            "incomplete and completed operations remain in effect"
+        )
+        pendings.append(detail)
+        auditor.log_step(name="prices_snapshot_after", status="warning", detail=detail)
+    summary_weights = _portfolio_weights_from_holdings(
+        spot_balances=latest_balances,
+        earn_positions=latest_earn_positions,
+        prices=latest_prices,
+        quote=quote,
+        data_quality=data_quality,
+    )
+    return PostTradeSnapshotResult(
+        payload=snapshot,
+        summary_weights=summary_weights,
     )
 
 
@@ -1495,11 +1686,8 @@ def _persist_performance_snapshot(
         detail = json.dumps(
             {
                 "phase": payload.get("phase"),
-                "total_value": payload.get("total_value"),
-                "spot_value": payload.get("spot_value"),
-                "earn_value": payload.get("earn_value"),
                 "data_quality": payload.get("data_quality"),
-                "missing_prices": payload.get("missing_prices", []),
+                "missing_price_count": len(payload.get("missing_prices", [])),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -1554,7 +1742,10 @@ def _build_holdings_context(
         "totals": {"spot": 0.0, "earn": 0.0, "overall": 0.0},
     }
     quote_asset = quote.upper()
-    for balance in spot_balances:
+    valued_spot_balances = _spot_balances_for_valuation(
+        spot_balances=spot_balances, earn_positions=earn_positions
+    )
+    for balance in valued_spot_balances:
         asset = balance.asset.upper()
         price = 1.0 if asset == quote_asset else prices.get(asset)
         if price is None:
@@ -1727,18 +1918,35 @@ def _ensure_target_prices(
     quote: str,
 ) -> Dict[str, float]:
     quote_asset = quote.upper()
+    required_assets = [
+        asset
+        for asset, weight in targets.items()
+        if asset != quote_asset and weight > 0
+    ]
     missing_assets = [
-        asset for asset in targets if asset != quote_asset and asset not in prices
+        asset for asset in required_assets if not _valid_market_price(prices.get(asset))
     ]
     if not missing_assets:
         return prices
     pairs = [f"{asset}{quote_asset}" for asset in missing_assets]
     fetched = client.get_prices(symbols=pairs)
     for symbol, price in fetched.items():
-        if symbol.endswith(quote_asset):
+        if symbol.endswith(quote_asset) and _valid_market_price(price):
             asset = symbol[: -len(quote_asset)]
             prices[asset] = price
+    if any(not _valid_market_price(prices.get(asset)) for asset in required_assets):
+        raise PortfolioError(
+            "Cannot plan rebalance because a target market price is invalid or unavailable"
+        )
     return prices
+
+
+def _valid_market_price(value: Any) -> bool:
+    try:
+        price = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(price) and price > 0
 
 
 def _print_run_detail(detail: Mapping[str, Any]) -> None:
@@ -1780,20 +1988,23 @@ def _normalize_argv(argv: Sequence[str] | None) -> list[str]:
 
 def _init_available_balances(
     snapshot: PortfolioSnapshot,
-    full_snapshot: PortfolioSnapshot,
+    _full_snapshot: PortfolioSnapshot,
     balances: Sequence[Balance],
+    *,
+    earn_positions: Sequence[SimpleEarnPosition] = (),
+    simulate_earn_redeem: bool = False,
 ) -> Dict[str, float]:
-    available: Dict[str, float] = {
-        asset: pos.quantity for asset, pos in snapshot.positions.items()
-    }
+    available: Dict[str, float] = {}
+    for balance in balances:
+        asset = balance.asset.upper()
+        available[asset] = available.get(asset, 0.0) + balance.free
+    if simulate_earn_redeem:
+        for position in earn_positions:
+            amount = position.redeemable_amount or position.total_amount
+            if amount > 0:
+                asset = position.asset.upper()
+                available[asset] = available.get(asset, 0.0) + amount
     quote = snapshot.quote_asset
-    if quote in full_snapshot.positions:
-        available[quote] = full_snapshot.positions[quote].quantity
-    else:
-        for bal in balances:
-            if bal.asset.upper() == quote:
-                available[quote] = bal.total
-                break
     available.setdefault(quote, 0.0)
     return available
 
@@ -1840,13 +2051,23 @@ def _summarize_executable_floors(
 
 def _print_summary(before: object, after: object) -> None:
     def format_weights(snapshot: object) -> Dict[str, float]:
+        if snapshot is None:
+            return {}
+        if isinstance(snapshot, Mapping):
+            return {
+                str(asset): round(float(weight), 4)
+                for asset, weight in snapshot.items()
+            }
         return {
             asset: round(position.weight, 4)
             for asset, position in getattr(snapshot, "positions", {}).items()
         }
 
     logger.info("Before weights: %s", format_weights(before))
-    logger.info("After  weights: %s", format_weights(after))
+    if after is None:
+        logger.info("After weights unavailable: no complete post-operation valuation")
+    else:
+        logger.info("After  weights: %s", format_weights(after))
 
 
 if __name__ == "__main__":

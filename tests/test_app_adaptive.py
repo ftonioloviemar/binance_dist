@@ -1170,7 +1170,7 @@ def test_rebalance_blocks_opposite_side_trade_inside_anti_churn_cooldown(
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     prior_time = datetime.now().astimezone() - timedelta(hours=1)
-    (logs_dir / "20260801.log").write_text(
+    (logs_dir / (prior_time.strftime("%Y%m%d") + ".log")).write_text(
         "\n".join(
             [
                 f"{prior_time.isoformat()} | run_start | run_id=prior | status=started | profile=moderate | dry_run=false",
