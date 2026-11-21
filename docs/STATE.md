@@ -36,7 +36,9 @@ Short continuity file for native Codex compaction and new chats. Keep this file 
 ## Context Economy
 
 - Before starting each new task in the same session, use focused `mcp context-mode` lookup, then reload the canonical docs and active card.
-- Prefer `ctx_execute_file`, `ctx_index`, and focused `ctx_search` for large files or history.
+- Current Context Mode Engine tools: `ctx_execute` (including optional `file`), `ctx_batch`, `ctx_index`, `ctx_search`, `ctx_resume`, `ctx_stats`, `ctx_doctor`, `ctx_upgrade`, and `ctx_purge`. Do not use obsolete `ctx_execute_file` or `ctx_batch_execute` names.
+- After compaction, use `ctx_resume`; use `ctx_doctor` for health checks. `ctx_upgrade` and `ctx_purge` require an explicit user request because they mutate the installation or delete indexed data.
+- 2026-11-21 `ctx_doctor`: Engine 2.2.1 reported latest; current hook round-trip, MCP, project, database, and index checks passed. Legacy data/temp artifacts and a prior hook error remain reported; no upgrade or cleanup was performed.
 - Use native Codex compaction when the context grows, but persist important handoff state here or in the active card first.
 
 ## Latest Verified State

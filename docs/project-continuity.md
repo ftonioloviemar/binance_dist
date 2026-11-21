@@ -52,7 +52,11 @@ These defaults do not override the trading safety rules below, strategy-selectio
 ## Context And Compaction Policy
 
 - Use context-mode to query indexed history or large files without loading everything into the live context.
-- Prefer `mcp__context_mode__.ctx_execute_file`, `ctx_index`, and focused `ctx_search` on Windows. Avoid broad full-file reads unless the file is small and directly needed.
+- Use the current Engine tools: `ctx_execute`, `ctx_batch`, `ctx_index`, `ctx_search`, `ctx_resume`, `ctx_stats`, `ctx_doctor`, `ctx_upgrade`, and `ctx_purge`. Do not document or invoke obsolete tool names such as `ctx_execute_file` or `ctx_batch_execute`.
+- On Windows/PowerShell, use `ctx_execute` with its optional `file` field to process a large file and print only the needed result. Use `ctx_index` plus focused `ctx_search` for sources that need repeated lookup; use `ctx_batch` for multiple concise commands and queries over their combined output.
+- After native compaction or resuming a long chat, use `ctx_resume` before repeating prior work. Use `ctx_doctor` for install/health checks and `ctx_stats` only when context savings are requested.
+- `ctx_purge` deletes indexed data and `ctx_upgrade` mutates the local installation; neither is routine project maintenance. Use them only on explicit user request. Treat doctor warnings as evidence to report, not permission to clean or upgrade automatically.
+- Prefer bounded direct reads for small files and `ctx_execute`/indexing for large content; avoid full dumps into the live context.
 - Native Codex compaction is allowed and expected when the context grows. Before compaction or chat handoff, write only durable, task-relevant state to `docs/STATE.md` or the active card.
 - `docs/STATE.md` must stay short: current objective, active/next card, latest verification, known blockers, and the next safe command. Do not turn it into a full session log.
 - A final context-mode checkpoint is optional. Use it only when there is concrete continuity risk before ending the session, switching chats, or starting a broad new task.

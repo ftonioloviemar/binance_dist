@@ -35,6 +35,11 @@ Use this catalog to decide which available Codex/project skills apply in this re
 
 - `pdf`, `spreadsheets`, `playwright`: use only when the task actually involves those artifacts or browser validation.
 
+## Context And Compaction
+
+- Use the current Context Mode Engine MCP tools for context retrieval: `ctx_search` for indexed history, `ctx_execute` (optional `file`) for bounded processing of large files/output, `ctx_index` for repeated lookup, `ctx_batch` for concise multi-command queries, and `ctx_resume` after native compaction or resuming a long chat.
+- Use `ctx_doctor` for installation/health checks and `ctx_stats` when asked about context savings. Do not use obsolete `ctx_execute_file`/`ctx_batch_execute` names. `ctx_upgrade` and `ctx_purge` are mutating operations and require explicit user authorization.
+
 ## Local Decisions
 
 - The issue tracker for this repo is `workflow/kanban/`, not GitHub Issues.

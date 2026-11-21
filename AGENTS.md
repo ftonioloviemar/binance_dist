@@ -31,7 +31,9 @@ These rules apply to agents and tools working in this repository.
 
 - Before starting each new task in the same session, use `mcp context-mode` to retrieve relevant indexed context cheaply, then reload `AGENTS.md`, `docs/project-continuity.md`, `docs/STATE.md`, the active card, and at most 1-2 canonical docs directly cited by the card.
 - Use native Codex compaction when context grows, but persist any important state first in `docs/STATE.md` or the active kanban card. Do not rely on chat memory alone for task continuity.
-- In Windows/PowerShell, prefer `mcp__context_mode__.ctx_execute_file`, `ctx_index`, or focused `ctx_search` over dumping whole files into context. Use `ctx_batch_execute` mainly for concise command batches and indexed searches.
+- Use the current Context Mode Engine MCP tools: `ctx_execute`, `ctx_batch`, `ctx_index`, `ctx_search`, `ctx_resume`, `ctx_stats`, `ctx_doctor`, `ctx_upgrade`, and `ctx_purge`.
+- In Windows/PowerShell, use `ctx_execute` with its optional `file` field for focused large-file processing; use `ctx_index` plus `ctx_search` when the same docs or output will be queried repeatedly. Use `ctx_batch` for multiple concise commands plus questions about their combined output. Do not call obsolete names such as `ctx_execute_file` or `ctx_batch_execute`.
+- After native compaction or resuming a long chat, call `ctx_resume` before repeating work. Use `ctx_doctor` to check installation/health and `ctx_stats` when context savings are requested. Never use `ctx_purge` or `ctx_upgrade` as routine maintenance; those change local data or the installation and require an explicit user request.
 - Do not repeat long results already captured in `docs/STATE.md`, kanban cards, or docs; reference the file and continue.
 - Context-mode is not mandatory inside subagents. Instead, prompts to subagents must include or point to the minimal rules and active-card context they need.
 - The coordinator must evaluate subagent output before applying it, and recalibrate future model/reasoning choices when a subagent is too weak, too expensive, or assigned to the wrong role.
